@@ -1,0 +1,35 @@
+# Local environment files. Keep only the documented template in Git.
+.env
+.env.*
+!.env.example
+
+# Firebase, payment, and other service credentials.
+*-firebase-adminsdk-*.json
+*service-account*.json
+*serviceAccount*.json
+*credentials*.json
+credentials/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# Dependencies and generated output.
+node_modules/
+dist/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# Runtime and local database artifacts.
+*.log
+*.dump
+*.sql.gz
+*.sqlite
+*.sqlite3
+*.db
+
+.DS_Store

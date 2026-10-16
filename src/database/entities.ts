@@ -1,0 +1,29 @@
+export interface Base { _id: string; createdAt: Date; updatedAt: Date; }
+export interface Scoped extends Base { workspaceId: string; }
+export interface User extends Base { name: string; email: string; phone?: string; passwordHash: string; firebaseUid?: string; role: 'teacher'; workspaceId: string; timezone: string; }
+export interface Workspace extends Base { name: string; ownerId: string; scheduleVersion?: number; }
+export interface AuthSession extends Base { userId: string; accessHash: string; refreshHash: string; accessExpiresAt: Date; expiresAt: Date; }
+export interface Student extends Scoped { name: string; grade: string; notes: string; status: 'active' | 'archived'; familyId?:string; invitationVersion:number; }
+export interface Family extends Scoped { name:string; parentName:string; parentPhone:string; version:number; invitationVersion:number; }
+export interface PortalAccount extends Scoped { role:'student'|'parent'; familyId?:string; studentId?:string; status:'active'|'revoked'; }
+export interface PortalSession extends Base { accountId:string; accessHash:string; refreshHash:string; accessExpiresAt:Date; expiresAt:Date; }
+export interface Subject extends Scoped { name: string; }
+export interface Schedule extends Scoped { studentId: string; subjectId: string; startAt: Date; endAt: Date; timezone: string; recurrence: 'none' | 'weekly'; repeatCount: number; status: 'scheduled' | 'cancelled'; }
+export interface LessonSession extends Scoped { scheduleId: string; studentId: string; subjectId: string; startAt: Date; endAt: Date; status: 'scheduled' | 'completed' | 'cancelled'; attendance: 'pending' | 'present' | 'excused' | 'absent' | 'cancelled'; }
+export interface LearningPlan extends Scoped { studentId: string; subjectId: string; title: string; startAt: Date; endAt: Date; }
+export interface Target extends Scoped { planId: string; studentId: string; subjectId: string; title: string; description: string; successCriteria: string; priority: 'low' | 'normal' | 'high'; status: 'active' | 'completed' | 'archived' | 'cancelled'; progress: number; version: number; }
+export interface ProgressHistory extends Scoped { targetId: string; planId: string; studentId: string; before: number; after: number; note: string; actorId: string; sessionId?: string; visibility: 'teacher' | 'student' | 'shared'; }
+export interface LessonReport extends Scoped { sessionId: string; studentId: string; topic: string; summary: string; targetIds: string[]; observations: string; difficulties: string; homework: string; recommendation: string; visibility: 'teacher' | 'student' | 'shared'; status: 'draft' | 'published'; publishedAt?: Date; }
+export interface Invitation extends Scoped { studentId?: string; familyId?:string; audience:'student'|'parent'; tokenHash: string; expiresAt: Date; revokedAt?: Date; redeemedAt?: Date; }
+export interface Notification extends Scoped { recipientAccountId?: string; title: string; body: string; route: string; readAt?: Date; eventKey: string; deliveryStatus:'pending'|'delivering'|'delivered'; deliveryAttempts:number; lastDeliveryError?:string; }
+export interface NotificationDevice extends Scoped { accountId: string; accountType: 'teacher'|'parent'|'student'; token: string; platform: 'android'|'ios'|'web'; lastSeenAt: Date; }
+export interface RescheduleRequest extends Scoped { sessionId: string; familyId: string; parentAccountId: string; studentId: string; oldStartAt: Date; oldEndAt: Date; requestedStartAt: Date; requestedEndAt: Date; proposedStartAt?: Date; proposedEndAt?: Date; reason: string; status: 'pending'|'approved'|'rejected'|'cancelled'|'expired'; reviewedBy?: string; reviewedAt?: Date; reviewNote?: string; }
+export interface AuditEvent extends Scoped { actorId: string; action: string; resourceId: string; }
+export interface Subscription extends Scoped { plan: 'trial'|'basic'|'pro'; trialStartedAt: Date; trialEndsAt: Date; paidThrough?: Date; usageVersion: number; }
+export interface SubscriptionOrder extends Scoped { plan: 'basic'|'pro'; amount: number; currency: string; reference: string; status: 'creating'|'pending'|'paid'|'failed'; open: boolean; checkoutUrl?: string; providerId?: string; paidAt?: Date; periodStart?: Date; periodEnd?: Date; }
+export interface BillingEvent extends Base { eventHash: string; type?: string; reference?: string; }
+export interface Assignment extends Scoped { studentId: string; subjectId: string; kind: 'task'|'material'; title: string; content: string; dueAt?: Date; status: 'draft'|'published'|'archived'; visibility: 'student'|'shared'; }
+export interface Submission extends Scoped { assignmentId: string; studentId: string; text: string; feedback: string; reviewedAt?: Date; version: number; }
+export interface ReportTemplate extends Scoped { name: string; topic: string; summary: string; observations: string; difficulties: string; homework: string; recommendation: string; }
+export interface TutorPreferences extends Scoped { displayName: string; tagline: string; footer: string; accentColor: string; reminders: boolean; progress: boolean; reports: boolean; assignments: boolean; }
+export interface Collections { users: User; workspaces: Workspace; authSessions: AuthSession; families:Family; portalAccounts:PortalAccount; portalSessions:PortalSession; students: Student; subjects: Subject; schedules: Schedule; sessions: LessonSession; plans: LearningPlan; targets: Target; histories: ProgressHistory; reports: LessonReport; invitations: Invitation; notifications: Notification; notificationDevices: NotificationDevice; rescheduleRequests: RescheduleRequest; audits: AuditEvent; subscriptions: Subscription; subscriptionOrders: SubscriptionOrder; billingEvents: BillingEvent; assignments: Assignment; submissions: Submission; reportTemplates: ReportTemplate; tutorPreferences: TutorPreferences; }
