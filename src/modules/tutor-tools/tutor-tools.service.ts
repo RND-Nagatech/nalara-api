@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import PDFDocument from 'pdfkit';
 import type { Principal } from '../../common/api';
 import { ListQuery } from '../../common/query.dto';
 import { ScopedService } from '../../common/scoped.service';
 import { aggregateProgress } from '../learning-plans/progress.rules';
 import { BrandingDto, PreferencesDto, TemplateDto } from './tutor-tools.dto';
+import { BrandingLogoService } from './branding-logo.service';
+import { renderReportPdf } from './report-pdf';
 
 export function csvCell(value: unknown) {
   let text = value instanceof Date ? value.toISOString() : String(value ?? '');
@@ -13,13 +14,16 @@ export function csvCell(value: unknown) {
 }
 @Injectable()
 export class TutorToolsService {
-  constructor(private readonly scope: ScopedService) {}
+  constructor(private readonly scope: ScopedService, private readonly logos: BrandingLogoService) {}
   async preferences(actor: Principal) {
     const row = await this.scope.db.collection('tutorPreferences').findOne({workspaceId: actor.workspaceId}).lean();
-    return row ?? {displayName: '', tagline: '', footer: '', accentColor: '#155D49', reminders: true, progress: true, reports: true, assignments: true};
+    if (!row) return {displayName: '', tagline: '', footer: '', accentColor: '#155D49', logoVersion: null, reminders: true, progress: true, reports: true, assignments: true};
+    const {logoKey, ...preferences} = row;
+    return {...preferences, logoVersion: logoKey ?? null};
   }
   async savePreferences(actor: Principal, dto: BrandingDto | PreferencesDto) {
-    return this.scope.db.collection('tutorPreferences').findOneAndUpdate({workspaceId: actor.workspaceId}, {$set: dto, $setOnInsert: {workspaceId: actor.workspaceId}}, {upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true}).lean();
+    await this.scope.db.collection('tutorPreferences').findOneAndUpdate({workspaceId: actor.workspaceId}, {$set: dto, $setOnInsert: {workspaceId: actor.workspaceId}}, {upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true}).lean();
+    return this.preferences(actor);
   }
   templates(actor: Principal, q: ListQuery) { return this.scope.list('reportTemplates', actor, q); }
   async saveTemplate(actor: Principal, dto: TemplateDto, id?: string) {
@@ -50,20 +54,12 @@ export class TutorToolsService {
   async pdf(actor: Principal, reportId: string) {
     const report = await this.scope.get('reports', reportId, actor);
     const lesson = await this.scope.get('sessions', report.sessionId, actor);
-    const [student, subject, branding] = await Promise.all([this.scope.get('students', report.studentId, actor), this.scope.get('subjects', lesson.subjectId, actor), this.preferences(actor)]);
-    const doc = new PDFDocument({size: 'A4', margins: {top: 48, bottom: 48, left: 48, right: 48}, info: {Title: `Laporan belajar - ${student.name}`, Author: actor.name}});
-    const bytes = new Promise<Buffer>((resolve, reject) => { const chunks: Buffer[] = []; doc.on('data', c => chunks.push(c)); doc.on('end', () => resolve(Buffer.concat(chunks))); doc.on('error', reject); });
-    const accent = /^#[0-9a-f]{6}$/i.test(branding.accentColor) ? branding.accentColor : '#155D49';
-    doc.fillColor(accent).fontSize(23).text(branding.displayName || 'NALARA');
-    if (branding.tagline) doc.fillColor('#5F6E66').fontSize(10).text(branding.tagline);
-    doc.moveDown().fillColor('#17251F').fontSize(18).text('Laporan perkembangan belajar');
-    const date = new Intl.DateTimeFormat('id-ID', {timeZone: actor.timezone, dateStyle: 'long'}).format(lesson.startAt);
-    doc.moveDown(0.5).fontSize(11).text(`${student.name} | ${subject.name}`).text(`${date} | ${report.status === 'draft' ? 'DRAFT - belum diterbitkan' : 'Laporan terbit'}`).moveDown();
-    const sections = [['Materi / topik', report.topic], ['Ringkasan sesi', report.summary], ['Pengamatan', report.observations], ['Kesulitan', report.difficulties], ['Latihan lanjutan', report.homework], ['Rekomendasi', report.recommendation]];
-    for (const [title, text] of sections) if (text) { doc.fontSize(12).fillColor(accent).text(title).moveDown(0.3).fontSize(11).fillColor('#17251F').text(text, {lineGap: 4}).moveDown(); }
-    doc.moveDown().fillColor('#5F6E66').fontSize(9).text(branding.footer || `Disusun oleh ${actor.name} melalui NALARA.`).text(`Visibilitas: ${report.visibility === 'teacher' ? 'Internal Guru' : report.visibility === 'student' ? 'Guru dan siswa' : 'Guru, siswa, dan orang tua'}`);
-    doc.end();
-    return {filename: `nalara-laporan-${reportId}.pdf`, mimeType: 'application/pdf', contentBase64: (await bytes).toString('base64')};
+    const [student, subject, branding, schedule] = await Promise.all([this.scope.get('students', report.studentId, actor),
+      this.scope.get('subjects', lesson.subjectId, actor), this.preferences(actor), this.scope.get('schedules', lesson.scheduleId, actor)]);
+    const logo = await this.logos.read(actor);
+    const bytes = await renderReportPdf({report, lesson, student, subject, branding, teacherName: actor.name,
+      timezone: schedule.timezone, logo: logo?.bytes});
+    return {filename: `nalara-laporan-${reportId}.pdf`, mimeType: 'application/pdf', contentBase64: bytes.toString('base64')};
   }
   async export(actor: Principal) {
     const tables = [

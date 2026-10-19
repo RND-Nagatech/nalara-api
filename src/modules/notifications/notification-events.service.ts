@@ -10,6 +10,7 @@ export interface NotificationEventInput {
   body: string;
   route: string;
   eventKey: string;
+  deliveryExpiresAt?: Date;
 }
 
 @Injectable()
@@ -35,7 +36,12 @@ export class NotificationEventsService {
           setDefaultsOnInsert: true,
         },
       ).lean();
-      if (notification) ids.push(notification._id);
+      if (notification) {
+        if (event.deliveryExpiresAt && !notification.deliveryExpiresAt) {
+          await this.db.collection('notifications').updateOne({_id:notification._id,workspaceId:event.workspaceId,deliveryExpiresAt:{$exists:false}},{$set:{deliveryExpiresAt:event.deliveryExpiresAt}},{session});
+        }
+        ids.push(notification._id);
+      }
     }
     return ids;
   }

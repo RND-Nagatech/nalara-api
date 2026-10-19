@@ -25,6 +25,8 @@ import { StudentPortalModule } from './modules/student-portal/student-portal.mod
 import { SubscriptionsModule } from './modules/subscriptions/subscriptions.module';
 import { SubscriptionGuard } from './modules/subscriptions/subscriptions.guard';
 import { TutorToolsModule } from './modules/tutor-tools/tutor-tools.module';
+import { TeachingGuideModule } from './modules/teaching-guide/teaching-guide.module';
+import { AccountDeletionModule } from './modules/account-deletion/account-deletion.module';
 
 @Global() @Module({providers:[ScopedService], exports:[ScopedService]}) class CommonModule {}
 @Module({imports:[
@@ -50,6 +52,6 @@ import { TutorToolsModule } from './modules/tutor-tools/tutor-tools.module';
     }),
   }),
   ThrottlerModule.forRoot([{name:'default', ttl:60_000, limit:120}]),
-  DatabaseModule, CommonModule, SubscriptionsModule, AuthModule, HealthModule, StudentsModule, SubjectsModule, SchedulesModule, LearningModule, ReportsModule, NotificationsModule, DashboardModule, InvitationsModule, FamiliesModule, ParentPortalModule, StudentPortalModule, TutorToolsModule,
+  DatabaseModule, CommonModule, SubscriptionsModule, AuthModule, HealthModule, StudentsModule, SubjectsModule, SchedulesModule, LearningModule, ReportsModule, NotificationsModule, DashboardModule, InvitationsModule, FamiliesModule, ParentPortalModule, StudentPortalModule, TutorToolsModule, TeachingGuideModule, AccountDeletionModule,
 ], providers:[{provide:APP_GUARD,useClass:ThrottlerGuard},{provide:APP_GUARD,useClass:AuthGuard},{provide:APP_GUARD,useClass:SubscriptionGuard}]})
 export class AppModule {}

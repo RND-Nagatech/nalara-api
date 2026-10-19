@@ -32,7 +32,7 @@ export class ParentPortalController {
   @UseGuards(PortalAuthGuard) @Get('notifications') notifications(@Req() req: PortalRequest, @Query() query: ListQuery) { return this.service.notifications(req.portalAccount, query); }
   @UseGuards(PortalAuthGuard) @Patch('notifications/:id/read') readNotification(@Req() req: PortalRequest, @Param('id', IdPipe) id: string) { return this.service.readNotification(req.portalAccount, id); }
   @UseGuards(PortalAuthGuard) @Post('notifications/read-all') @HttpCode(200) readAllNotifications(@Req() req: PortalRequest) { return this.service.readAllNotifications(req.portalAccount); }
-  @UseGuards(PortalAuthGuard) @Post('notifications/devices') @HttpCode(200) registerDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) { return this.devices.registerPortal(req.portalAccount, dto); }
+  @UseGuards(PortalAuthGuard) @Post('notifications/devices') @HttpCode(200) registerDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) { return this.devices.registerPortal(req.portalAccount, dto, req.portalSessionId); }
   @UseGuards(PortalAuthGuard) @Delete('notifications/devices') @HttpCode(200) unregisterDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) { return this.devices.unregisterPortal(req.portalAccount, dto); }
   @UseGuards(PortalAuthGuard) @Get('availability') availability(@Req() req: PortalRequest, @Query() dto: ParentAvailabilityDto) { return this.service.availability(req.portalAccount, dto); }
   @UseGuards(PortalAuthGuard) @Post('reschedule-requests') @HttpCode(201) request(@Req() req: PortalRequest, @Body() dto: ParentRescheduleDto) { return this.service.requestReschedule(req.portalAccount, dto); }

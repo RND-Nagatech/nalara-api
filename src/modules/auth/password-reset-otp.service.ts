@@ -11,6 +11,42 @@ export type IssuedPasswordResetOtp = {otp: string | null; expiresInSeconds: numb
 
 const hashValue = (value: string) => createHash('sha256').update(value).digest('hex');
 
+// One Redis operation owns comparison, attempt accounting, OTP consumption and
+// reset-token issuance. A process-local lock cannot protect multiple API replicas.
+export const PASSWORD_RESET_VERIFY_SCRIPT = `
+local stored = redis.call('GET', KEYS[1])
+if not stored then return 'expired' end
+local ok, record = pcall(cjson.decode, stored)
+if not ok or type(record) ~= 'table' or type(record.userId) ~= 'string'
+  or record.userId == '' or type(record.otpHash) ~= 'string'
+  or type(record.attempts) ~= 'number' or record.attempts < 0
+  or record.attempts ~= math.floor(record.attempts) then
+  redis.call('DEL', KEYS[1])
+  return 'invalid'
+end
+if redis.call('PTTL', KEYS[1]) <= 0 then
+  redis.call('DEL', KEYS[1])
+  return 'expired'
+end
+if record.attempts >= 5 then
+  redis.call('DEL', KEYS[1])
+  return 'locked'
+end
+if record.otpHash ~= ARGV[1] then
+  record.attempts = record.attempts + 1
+  if record.attempts >= 5 then
+    redis.call('DEL', KEYS[1])
+    return 'locked'
+  end
+  redis.call('SET', KEYS[1], cjson.encode(record), 'KEEPTTL')
+  return 'mismatch'
+end
+local issued = redis.call('SET', KEYS[2], cjson.encode({userId = record.userId}), 'EX', ARGV[2], 'NX')
+if not issued then return 'unavailable' end
+redis.call('DEL', KEYS[1])
+return 'ok'
+`;
+
 @Injectable()
 export class PasswordResetOtpService implements OnModuleDestroy {
   private readonly cooldownSeconds = 60;
@@ -29,8 +65,7 @@ export class PasswordResetOtpService implements OnModuleDestroy {
   private resetTokenKey(token: string) { return `password-reset:token:${hashValue(token)}`; }
 
   private redisUnavailable(error: unknown): never {
-    const message = error instanceof Error ? error.message : String(error);
-    this.logger.warn(`Redis OTP operation failed: ${message}`);
+    this.logger.warn({event: 'auth.otp.redis_unavailable', errorType: error instanceof Error ? error.name : 'Unknown'});
     throw new ServiceUnavailableException('Layanan OTP sedang tidak tersedia. Coba lagi sebentar.');
   }
 
@@ -55,20 +90,13 @@ export class PasswordResetOtpService implements OnModuleDestroy {
   async verify(email: string, otp: string): Promise<string> {
     try {
       const key = this.otpKey(email.trim().toLowerCase());
-      const stored = await this.redis.get(key);
-      if (!stored) throw new UnauthorizedException('OTP kedaluwarsa atau belum diminta.');
-      let record: OtpRecord;
-      try { record = JSON.parse(stored) as OtpRecord; } catch { await this.redis.del(key); throw new UnauthorizedException('OTP tidak valid.'); }
-      if (record.attempts >= 5) { await this.redis.del(key); throw new UnauthorizedException('Terlalu banyak percobaan OTP. Minta OTP baru.'); }
-      if (hashValue(otp) !== record.otpHash) {
-        const ttl = await this.redis.ttl(key);
-        record.attempts += 1;
-        if (ttl > 0) await this.redis.set(key, JSON.stringify(record), 'EX', ttl);
-        throw new UnauthorizedException('OTP tidak sesuai.');
-      }
-      await this.redis.del(key);
       const resetToken = randomBytes(32).toString('base64url');
-      await this.redis.set(this.resetTokenKey(resetToken), JSON.stringify({userId: record.userId} satisfies ResetTokenRecord), 'EX', this.resetTokenSeconds);
+      const result = await this.redis.eval(PASSWORD_RESET_VERIFY_SCRIPT, 2, key, this.resetTokenKey(resetToken), hashValue(otp), this.resetTokenSeconds);
+      if (result === 'expired') throw new UnauthorizedException('OTP kedaluwarsa atau belum diminta.');
+      if (result === 'invalid') throw new UnauthorizedException('OTP tidak valid.');
+      if (result === 'locked') throw new UnauthorizedException('Terlalu banyak percobaan OTP. Minta OTP baru.');
+      if (result === 'mismatch') throw new UnauthorizedException('OTP tidak sesuai.');
+      if (result !== 'ok') throw new ServiceUnavailableException('Layanan OTP sedang tidak tersedia. Coba lagi sebentar.');
       return resetToken;
     } catch (error) {
       if (error instanceof HttpException) throw error;

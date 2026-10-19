@@ -19,6 +19,11 @@ export function validateEnvironment(input: Record<string, unknown>) {
   if (env.NOTIFICATION_DELIVERY_URL && !String(env.NOTIFICATION_DELIVERY_URL).startsWith('https://')) throw new Error('NOTIFICATION_DELIVERY_URL harus HTTPS');
   const notificationIntervalMinutes = Number(env.NOTIFICATION_SCHEDULER_INTERVAL_MINUTES ?? 15);
   if (!Number.isInteger(notificationIntervalMinutes) || notificationIntervalMinutes < 5 || notificationIntervalMinutes > 60) throw new Error('NOTIFICATION_SCHEDULER_INTERVAL_MINUTES harus berupa bilangan bulat 5 sampai 60');
+  for (const [key, fallback, min, max] of [['NOTIFICATION_DELIVERY_INTERVAL_SECONDS',15,5,300],['NOTIFICATION_DELIVERY_BATCH_SIZE',25,1,100],['BILLING_RECONCILIATION_INTERVAL_SECONDS',60,30,3600],['BILLING_RECONCILIATION_BATCH_SIZE',10,1,50],['ACCOUNT_DELETION_INTERVAL_SECONDS',60,30,3600],['ACCOUNT_DELETION_BATCH_SIZE',5,1,20]] as const) {
+    const value = Number(env[key] ?? fallback);
+    if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`${key} tidak valid`);
+    env[key] = value;
+  }
   for (const [key, fallback, max] of [['SUBSCRIPTION_TRIAL_DAYS',14,365],['SUBSCRIPTION_BASIC_STUDENTS',30,100000],['SUBSCRIPTION_BASIC_PRICE',39000,100000000],['SUBSCRIPTION_PRO_PRICE',79000,100000000]] as const) {
     const value = Number(env[key] ?? fallback);
     if(!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${key} tidak valid`);

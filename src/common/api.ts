@@ -22,6 +22,6 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const payload = error instanceof HttpException ? error.getResponse() : null;
     const message = typeof payload === 'string' ? payload : (payload as {message?: unknown})?.message ?? (status === 409 ? 'Data sudah tersedia' : 'Terjadi kesalahan pada server');
     const details = payload && typeof payload === 'object' ? payload as {code?: string; feature?: string; route?: string} : {};
-    response.status(status).json({error: {code: details.code ?? ({400:'VALIDATION_ERROR',401:'UNAUTHENTICATED',402:'SUBSCRIPTION_REQUIRED',403:'FORBIDDEN',404:'NOT_FOUND',409:'CONFLICT',429:'RATE_LIMITED',503:'UNAVAILABLE'} as Record<number,string>)[status] ?? 'INTERNAL_ERROR', message, feature: details.feature, route: details.route, requestId: request.id}});
+    response.status(status).json({error: {code: details.code ?? ({400:'VALIDATION_ERROR',401:'UNAUTHENTICATED',402:'SUBSCRIPTION_REQUIRED',403:'FORBIDDEN',404:'NOT_FOUND',409:'CONFLICT',413:'PAYLOAD_TOO_LARGE',429:'RATE_LIMITED',503:'UNAVAILABLE'} as Record<number,string>)[status] ?? 'INTERNAL_ERROR', message, feature: details.feature, route: details.route, requestId: request.id}});
   }
 }

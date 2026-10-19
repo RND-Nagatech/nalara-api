@@ -32,7 +32,7 @@ export class StudentPortalController {
   @UseGuards(PortalAuthGuard) @Post('notifications/read-all') @HttpCode(200) readAllNotifications(@Req() req: PortalRequest) { return this.service.readAllNotifications(req.portalAccount); }
   @UseGuards(PortalAuthGuard) @Post('notifications/devices') @HttpCode(200) registerDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) {
     if (req.portalAccount.role !== 'student') throw new ForbiddenException('Endpoint ini khusus akun siswa');
-    return this.devices.registerPortal(req.portalAccount, dto);
+    return this.devices.registerPortal(req.portalAccount, dto, req.portalSessionId);
   }
   @UseGuards(PortalAuthGuard) @Delete('notifications/devices') @HttpCode(200) unregisterDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) {
     if (req.portalAccount.role !== 'student') throw new ForbiddenException('Endpoint ini khusus akun siswa');

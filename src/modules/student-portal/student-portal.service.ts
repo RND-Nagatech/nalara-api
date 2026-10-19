@@ -182,7 +182,7 @@ export class StudentPortalService {
       ...targets.map((row) => `target-created:${row._id}:student:${account._id}`),
       ...histories.map((row) => `progress:${row._id}:student:${account._id}`),
     ];
-    return { workspaceId: account.workspaceId, recipientAccountId: account._id, $or: [{ route: { $in: routes } }, { eventKey: { $in: eventKeys } }] };
+    return { workspaceId: account.workspaceId, recipientAccountId: account._id, $or: [{ route: { $in: routes } }, { eventKey: { $in: eventKeys } }, {eventKey: {$regex: '^target-due:'}, route: {$in: targets.map(row => `/student/targets/${row._id}`)}}] };
   }
 
   async notifications(account: StudentAccount, query: ListQuery) {

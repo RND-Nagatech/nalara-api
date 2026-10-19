@@ -52,20 +52,27 @@ export class BillingService {
       return 'Status pembayaran belum dapat disinkronkan. Paket sebelumnya tetap ditampilkan. Silakan periksa pembayaran kembali.';
     }
   }
-  async refresh(actor: Principal, id: string) {
+  async refresh(actor: Pick<Principal, 'workspaceId'>, id: string) {
     const order = await this.db.collection('subscriptionOrders').findOne({_id: id, workspaceId: actor.workspaceId}).lean();
     if (!order) throw new NotFoundException('Pembayaran tidak ditemukan.');
     if (order.status !== 'paid') {
       await this.reconcile(order.reference);
       const latest = await this.db.collection('subscriptionOrders').findOne({_id: id, workspaceId: actor.workspaceId}).lean();
       if (latest && latest.status !== 'paid' && !latest.checkoutUrl && latest.open) {
-        const recovered = await this.provider.recover(order.reference,order.amount);
-        if(recovered) await this.db.collection('subscriptionOrders').updateOne({_id:id,workspaceId:actor.workspaceId,status:'creating'},{$set:{...recovered,status:'pending'}});
+        await this.recoverLink(order.reference);
       }
     }
     return (await this.db.collection('subscriptionOrders').findOne({_id: id, workspaceId: actor.workspaceId}).lean())!;
   }
-  async cancel(actor: Principal, id: string) {
+  async recoverLink(reference: string) {
+    const order = await this.db.collection('subscriptionOrders').findOne({reference,open:true,status:{$in:['creating','pending']}}).lean();
+    if (!order || (order.checkoutUrl && order.providerId)) return;
+    // Recovery is read-only at the provider. Never create another link/charge
+    // merely because the response to the original request was lost.
+    const recovered = await this.provider.recover(order.reference,order.amount);
+    if (recovered) await this.db.collection('subscriptionOrders').updateOne({_id:order._id,workspaceId:order.workspaceId,open:true,status:{$in:['creating','pending']}},{$set:{...recovered,status:'pending'}});
+  }
+  async cancel(actor: Pick<Principal, 'workspaceId'>, id: string) {
     const order = await this.refresh(actor,id);
     if(order.status === 'paid') throw new ConflictException('Pembayaran sudah berhasil dan tidak dapat dibatalkan.');
     if(!order.open) return order;
@@ -78,8 +85,16 @@ export class BillingService {
     if (!order || order.status === 'paid') return;
     if (!await this.provider.paid(order.reference, order.amount, order.providerId)) return;
     await this.db.connection.transaction(async session => {
-      const current = await this.db.collection('subscriptions').findOneAndUpdate({workspaceId: order.workspaceId}, {$inc: {usageVersion: 1}}, {session, returnDocument: 'after'}).lean();
-      if (!current) throw new NotFoundException('Langganan tidak ditemukan.');
+      const current = await this.db.collection('subscriptions').findOneAndUpdate({workspaceId: order.workspaceId, deletionRequestedAt: {$exists: false}}, {$inc: {usageVersion: 1}}, {session, returnDocument: 'after'}).lean();
+      if (!current) {
+        if (await this.db.collection('accountDeletions').exists({workspaceId: order.workspaceId}).session(session)) {
+          // Record a provider-verified settlement for cleanup, never reactivate
+          // an account whose deletion has already been accepted.
+          await this.db.collection('subscriptionOrders').updateOne({_id: order._id, workspaceId: order.workspaceId, status: {$ne: 'paid'}}, {$set: {status: 'paid', open: false, paidAt: new Date()}}, {session});
+          return;
+        }
+        throw new NotFoundException('Langganan tidak ditemukan.');
+      }
       const claimed = await this.db.collection('subscriptionOrders').findOneAndUpdate({_id: order._id, status: {$ne: 'paid'}}, {$set: {status: 'paid', open: false, paidAt: new Date()}}, {session, returnDocument: 'after'}).lean();
       if (!claimed) return;
       const now = new Date();

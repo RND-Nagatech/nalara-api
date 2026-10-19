@@ -1,7 +1,7 @@
 import { schema, required, date, scope } from '../../database/schema';
 export const invitationsSchemas = {
   invitations: schema({...scope, studentId: String, familyId:String, audience:{type:String,enum:['student','parent'],default:'student'}, tokenHash: {...required, select: false}, expiresAt: date, revokedAt: Date, redeemedAt: Date}),
-  portalAccounts: schema({...scope, role:{type:String,required:true,enum:['student','parent']},familyId:String,studentId:String,status:{type:String,enum:['active','revoked'],default:'active'}}),
+  portalAccounts: schema({...scope, role:{type:String,required:true,enum:['student','parent']},familyId:String,studentId:String,status:{type:String,enum:['active','revoked'],default:'active'},notificationVersion:{type:Number,default:0,min:0}}),
   portalSessions: schema({accountId:required,accessHash:required,refreshHash:required,accessExpiresAt:date,expiresAt:date}),
 };
 invitationsSchemas.invitations.index({tokenHash: 1}, {unique: true});

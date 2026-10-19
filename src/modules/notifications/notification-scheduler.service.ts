@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Database } from '../../database/database.module';
 import { NotificationEventsService, NotificationEventInput } from './notification-events.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { effectiveSubscription } from '../subscriptions/catalog';
 
 type LocalParts = { year: number; month: number; day: number };
 
@@ -33,18 +34,43 @@ export class NotificationScheduler implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
-      const teachers = await this.db.collection('users').find({ role: 'teacher' }).select('workspaceId timezone').lean();
+      const teachers = await this.db.collection('users').find({ role: 'teacher', deletionRequestedAt: {$exists: false} }).select('workspaceId timezone').lean();
       const workspaces = new Map(teachers.map((teacher) => [teacher.workspaceId, teacher.timezone]));
       for (const [workspaceId, timezone] of workspaces) {
-        if(!await this.subscriptions.canUse(workspaceId,'automaticReminders')) continue;
-        await this.remindTargets(workspaceId, timezone, now);
-        await this.remindSessions(workspaceId, timezone, now);
+        try {
+          await this.remindSubscription(workspaceId, timezone, now);
+          if(!await this.subscriptions.canUse(workspaceId,'automaticReminders')) continue;
+          await this.remindTargets(workspaceId, timezone, now);
+          await this.remindSessions(workspaceId, timezone, now);
+        } catch (error) {
+          this.logger.warn({event:'notification.reminder.workspace_failed',workspaceId,errorType:error instanceof Error?error.name:'Unknown'});
+        }
       }
     } catch (error) {
-      this.logger.warn(`Notification scheduler gagal: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      this.logger.warn({event:'notification.reminder.scan_failed',errorType:error instanceof Error?error.name:'Unknown'});
     } finally {
       this.running = false;
     }
+  }
+
+  private async remindSubscription(workspaceId: string, timezone: string, now: Date) {
+    // Background work must never create/extend a trial through ensure/state.
+    const subscription = await this.db.collection('subscriptions').findOne({workspaceId}).lean();
+    if (!subscription) return;
+    const state = effectiveSubscription(subscription, now);
+    if (!state.active || ![3, 1].includes(state.daysRemaining)) return;
+    const deadline = new Intl.DateTimeFormat('id-ID', {timeZone:timezone,dateStyle:'long',timeStyle:'short'}).format(state.endsAt);
+    const trial = state.plan === 'trial';
+    const teachers = await this.events.teacherIds(workspaceId);
+    const events = teachers.map(recipientAccountId => ({
+      workspaceId, recipientAccountId,
+      title: trial ? 'Masa uji coba segera berakhir' : 'Pengingat perpanjangan langganan',
+      body: trial ? `Masa uji coba NALARA Anda berakhir pada ${deadline}. Silakan pilih paket langganan untuk melanjutkan pengelolaan pembelajaran.`
+        : `Langganan Tutor ${state.plan === 'pro' ? 'Pro' : 'Basic'} Anda berakhir pada ${deadline}. Silakan perpanjang langganan untuk menjaga kelanjutan akses fitur.`,
+      route: '/teacher/subscription', deliveryExpiresAt: new Date(state.endsAt.getTime() - (state.daysRemaining - 1) * 86400_000),
+      eventKey: `subscription-expiring:${subscription._id}:${state.endsAt.getTime()}:${state.daysRemaining}:teacher:${recipientAccountId}`,
+    }));
+    await this.events.deliverAfterCommit(await this.events.create(events));
   }
 
   private parts(now: Date, timezone: string): LocalParts {
@@ -117,6 +143,7 @@ export class NotificationScheduler implements OnModuleInit, OnModuleDestroy {
       for (const parentId of recipients.parentIds) events.push({ workspaceId, recipientAccountId: parentId, title: 'Pengingat target belajar', body: base, route: `/parent/plans/${plan._id}`, eventKey: `target-due:${target._id}:${window.date}:parent:${parentId}` });
       for (const studentId of recipients.studentIds) events.push({ workspaceId, recipientAccountId: studentId, title: 'Pengingat target belajar', body: base, route: `/student/targets/${target._id}`, eventKey: `target-due:${target._id}:${window.date}:student:${studentId}` });
     }
+    for (const event of events) event.deliveryExpiresAt = window.start;
     await this.events.deliverAfterCommit(await this.events.create(events));
   }
 
@@ -139,6 +166,7 @@ export class NotificationScheduler implements OnModuleInit, OnModuleDestroy {
       for (const parentId of recipients.parentIds) events.push({ workspaceId, recipientAccountId: parentId, title: 'Pengingat jadwal les', body, route: `/parent/sessions/${lesson._id}`, eventKey: `lesson-reminder:${lesson._id}:${window.date}:parent:${parentId}` });
       for (const studentId of recipients.studentIds) events.push({ workspaceId, recipientAccountId: studentId, title: 'Pengingat jadwal les', body, route: `/student/sessions/${lesson._id}`, eventKey: `lesson-reminder:${lesson._id}:${window.date}:student:${studentId}` });
     }
+    for (const event of events) event.deliveryExpiresAt = window.start;
     await this.events.deliverAfterCommit(await this.events.create(events));
   }
 

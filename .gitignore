@@ -23,6 +23,8 @@ dist/
 coverage/
 .nyc_output/
 *.tsbuildinfo
+uploads/
+tmp/
 
 # Runtime and local database artifacts.
 *.log

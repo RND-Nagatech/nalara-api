@@ -15,7 +15,8 @@ import { familiesSchemas } from '../modules/families/families.schemas';
 import { parentPortalSchemas } from '../modules/parent-portal/parent-portal.schemas';
 import { subscriptionSchemas } from '../modules/subscriptions/subscriptions.schemas';
 import { tutorToolsSchemas } from '../modules/tutor-tools/tutor-tools.schemas';
-const schemas:Record<keyof Collections,Schema>={...authSchemas,...studentsSchemas,...subjectsSchemas,...schedulesSchemas,...learningSchemas,...reportsSchemas,...invitationsSchemas,...notificationsSchemas,...parentPortalSchemas,...auditSchemas,...familiesSchemas,...subscriptionSchemas,...tutorToolsSchemas};
+import { accountDeletionSchemas } from '../modules/account-deletion/account-deletion.schemas';
+const schemas:Record<keyof Collections,Schema>={...authSchemas,...studentsSchemas,...subjectsSchemas,...schedulesSchemas,...learningSchemas,...reportsSchemas,...invitationsSchemas,...notificationsSchemas,...parentPortalSchemas,...auditSchemas,...familiesSchemas,...subscriptionSchemas,...tutorToolsSchemas,...accountDeletionSchemas};
 
 @Injectable()
 export class Database implements OnModuleInit {

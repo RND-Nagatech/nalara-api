@@ -53,7 +53,7 @@ export class FirebaseAuthService {
     return getApp();
   }
 
-  async verifyIdToken(idToken: string): Promise<DecodedIdToken> {
+  async verifyIdToken(idToken: string, checkRevoked = false): Promise<DecodedIdToken> {
     let auth: ReturnType<typeof getAuth>;
     try {
       auth = this.getAuthClient();
@@ -65,11 +65,29 @@ export class FirebaseAuthService {
     }
 
     try {
-      return await auth.verifyIdToken(idToken);
+      return await auth.verifyIdToken(idToken, checkRevoked);
     } catch {
       throw new UnauthorizedException(
         'Token Google tidak valid atau sudah kedaluwarsa.',
       );
+    }
+  }
+
+  async deleteUser(uid: string): Promise<void> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.getAuthClient().deleteUser(uid),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new ServiceUnavailableException('Penghapusan identitas Firebase akan dicoba kembali.')), 8_000);
+        }),
+      ]);
+    } catch (error) {
+      if ((error as {code?: string}).code !== 'auth/user-not-found') {
+        throw new ServiceUnavailableException('Penghapusan identitas Firebase akan dicoba kembali.');
+      }
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 }

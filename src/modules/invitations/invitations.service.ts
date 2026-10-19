@@ -60,6 +60,8 @@ export class InvitationsService {
       const accounts = await this.db.collection('portalAccounts').find({workspaceId:actor.workspaceId,role,...target}).session(session).lean();
       await this.db.collection('portalAccounts').updateMany({workspaceId:actor.workspaceId,role,...target},{$set:{status:'revoked'}},{session});
       await this.db.collection('portalSessions').deleteMany({accountId:{$in:accounts.map(a=>a._id)}},{session});
+      await this.db.collection('notificationDevices').deleteMany({workspaceId:actor.workspaceId,accountType:role,accountId:{$in:accounts.map(a=>a._id)}},{session});
+      await this.db.collection('notifications').updateMany({workspaceId:actor.workspaceId,recipientAccountId:{$in:accounts.map(a=>a._id)},deliveryStatus:{$in:['pending','delivering']}},{$set:{deliveryStatus:'suppressed'},$unset:{deliveryClaimId:1,deliveryLeaseUntil:1,deliveryNextAttemptAt:1}},{session});
       await this.db.collection('invitations').updateMany({workspaceId:actor.workspaceId,audience:role,...target},{$set:{revokedAt:new Date()}},{session});
       await this.scope.audit(actor,'portal.access.revoked',target.familyId??target.studentId!,session);
     });
@@ -105,6 +107,8 @@ export class InvitationsService {
     const tokens = this.tokens();
     return this.db.connection.transaction(async session=>{
       const candidate=await this.usableInvitation(dto.token,dto.audience,session);
+      const workspace = await this.db.collection('workspaces').updateOne({_id: candidate.workspaceId, deletionRequestedAt: {$exists: false}}, {$inc: {scheduleVersion: 1}}, {session});
+      if (!workspace.matchedCount) throw inactiveReferralCode();
       const invite = await this.db.collection('invitations').findOneAndUpdate({_id:candidate._id,workspaceId:candidate.workspaceId,audience:dto.audience,expiresAt:{$gt:new Date()},revokedAt:{$exists:false},redeemedAt:{$exists:false}},{$set:{redeemedAt:new Date()}},{session,returnDocument:'after'}).lean();
       if (!invite) throw inactiveReferralCode();
       if (invite.audience==='parent') await this.db.collection('families').updateOne({_id:invite.familyId,workspaceId:invite.workspaceId},{$inc:{invitationVersion:1}},{session});

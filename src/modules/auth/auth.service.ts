@@ -1,6 +1,7 @@
-import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { hash, verify, argon2id } from 'argon2';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import type { ClientSession } from 'mongoose';
 import { Database } from '../../database/database.module';
 import type { User } from '../../database/entities';
 import { ForgotDto, GoogleLoginDto, LoginDto, RegisterDto, ResetDto, VerifyResetOtpDto } from './auth.dto';
@@ -53,24 +54,32 @@ export class AuthService {
     // exposing which email or phone numbers have an account.
     if (!user) throw new UnauthorizedException(invalidCredentials);
     if (!await verify(user.passwordHash, dto.password)) throw new UnauthorizedException(invalidCredentials);
+    if (user.deletionRequestedAt) throw new ForbiddenException('Akun sedang dihapus dan tidak dapat digunakan kembali.');
     return this.issue(user);
   }
   async loginWithGoogle(dto: GoogleLoginDto) {
-    const decoded = await this.firebase.verifyIdToken(dto.idToken);
+    const decoded = await this.firebase.verifyIdToken(dto.idToken, true);
     const email = decoded.email?.trim().toLowerCase();
     if (!email || decoded.email_verified !== true) {
       throw new UnauthorizedException('Akun Google harus memiliki email terverifikasi.');
     }
+    await this.assertGoogleIdentityOpen(decoded.uid);
 
     const users = this.db.collection('users');
     let user = await users.findOne({firebaseUid: decoded.uid}).lean();
     if (!user) {
       const emailUser = await users.findOne({email}).lean();
       if (emailUser) {
+        if (emailUser.deletionRequestedAt) throw new ForbiddenException('Akun sedang dihapus dan tidak dapat digunakan kembali.');
         if (emailUser.firebaseUid && emailUser.firebaseUid !== decoded.uid) {
           throw new ConflictException('Email sudah terhubung ke akun Google lain.');
         }
-        await users.updateOne({_id: emailUser._id}, {$set: {firebaseUid: decoded.uid}});
+        await this.assertGoogleIdentityOpen(decoded.uid);
+        const linked = await users.updateOne({_id: emailUser._id, workspaceId: emailUser.workspaceId,
+          deletionRequestedAt: {$exists: false},
+          ...(emailUser.firebaseUid ? {firebaseUid: emailUser.firebaseUid} : {firebaseUid: {$exists: false}})},
+        {$set: {firebaseUid: decoded.uid}});
+        if (linked.matchedCount !== 1) throw new ConflictException('Informasi akun berubah. Silakan masuk kembali.');
         user = await users.findById(emailUser._id).lean();
       } else {
         const userId = randomUUID();
@@ -78,6 +87,9 @@ export class AuthService {
         const name = (decoded.name?.trim() || email.split('@')[0]).slice(0, 100);
         const passwordHash = await hash(randomBytes(32).toString('base64url'), {type: argon2id});
         user = await this.db.connection.transaction(async session => {
+          // A token verified before erasure must not recreate its old identity
+          // after the worker has already removed the previous user record.
+          await this.assertGoogleIdentityOpen(decoded.uid, session);
           await this.db.collection('workspaces').create([{_id: workspaceId, ownerId: userId, name: `Bimbel ${name}`}], {session});
           const [record] = await users.create([{_id: userId, name, email, passwordHash, firebaseUid: decoded.uid, workspaceId}], {session});
           return record.toObject();
@@ -87,11 +99,21 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('Akun Google tidak dapat dibuat.');
     return this.issue(user);
   }
+  private async assertGoogleIdentityOpen(uid: string, session?: ClientSession) {
+    if (await this.db.collection('accountDeletions').exists({$or: [{firebaseUid: uid}, {firebaseUidHash: tokenHash(uid)}]}).session(session ?? null)) {
+      throw new ForbiddenException('Identitas NALARA ini sudah ditutup untuk penghapusan. Mulai login Google baru setelah proses selesai.');
+    }
+  }
   private tokens() { return {accessToken: randomBytes(32).toString('base64url'), refreshToken: randomBytes(48).toString('base64url'), accessExpiresAt: new Date(Date.now() + 15 * 60_000), expiresAt: new Date(Date.now() + 30 * 86400_000)}; }
   private async issue(user: User) {
+    if (user.deletionRequestedAt) throw new ForbiddenException('Akun sedang dihapus dan tidak dapat digunakan kembali.');
     await this.subscriptions.ensure(user.workspaceId);
     const tokens = this.tokens();
-    await this.db.collection('authSessions').create({userId: user._id, accessHash: tokenHash(tokens.accessToken), refreshHash: tokenHash(tokens.refreshToken), accessExpiresAt: tokens.accessExpiresAt, expiresAt: tokens.expiresAt});
+    await this.db.connection.transaction(async session => {
+      const admitted = await this.db.collection('users').updateOne({_id: user._id, workspaceId: user.workspaceId, deletionRequestedAt: {$exists: false}}, {$inc: {authVersion: 1}}, {session});
+      if (!admitted.matchedCount) throw new ForbiddenException('Akun sedang dihapus dan tidak dapat digunakan kembali.');
+      await this.db.collection('authSessions').create([{userId: user._id, accessHash: tokenHash(tokens.accessToken), refreshHash: tokenHash(tokens.refreshToken), accessExpiresAt: tokens.accessExpiresAt, expiresAt: tokens.expiresAt}], {session});
+    });
     return {...tokens, user: safeUser(user)};
   }
   async refresh(refreshToken: string) {
@@ -99,13 +121,13 @@ export class AuthService {
     const session = await this.db.collection('authSessions').findOneAndUpdate({refreshHash: tokenHash(refreshToken), expiresAt: {$gt: new Date()}}, {$set: {accessHash: tokenHash(tokens.accessToken), refreshHash: tokenHash(tokens.refreshToken), accessExpiresAt: tokens.accessExpiresAt}}, {returnDocument: 'after'}).lean();
     if (!session) throw new UnauthorizedException('Sesi telah berakhir');
     const user = await this.db.collection('users').findById(session.userId).lean();
-    if (!user) throw new UnauthorizedException('Sesi tidak valid');
+    if (!user || user.deletionRequestedAt) throw new UnauthorizedException('Sesi tidak valid');
     return {...tokens, expiresAt: session.expiresAt, user: safeUser(user)};
   }
   async logout(sessionId: string) { await this.db.collection('authSessions').deleteOne({_id: sessionId}); return {message: 'Berhasil keluar'}; }
   async forgot(dto: ForgotDto) {
     const email = dto.email.toLowerCase().trim();
-    const user = await this.db.collection('users').findOne({email}).lean();
+    const user = await this.db.collection('users').findOne({email, deletionRequestedAt: {$exists: false}}).lean();
     const challenge = await this.passwordResetOtp.issue(email, user?._id);
     if (user && challenge.otp) await this.resendMail.sendPasswordResetOtp(user.email, challenge.otp, challenge.expiresInSeconds);
     return {accepted: true, otpExpiresInSeconds: this.passwordResetOtp.expiresInSeconds};
@@ -118,14 +140,14 @@ export class AuthService {
     assertPasswordPolicy(dto.newPassword);
     const userId = await this.passwordResetOtp.peek(dto.resetToken);
     const user = await this.db.collection('users').findById(userId).select('+passwordHash').lean();
-    if (!user) throw new UnauthorizedException('Token reset tidak valid.');
+    if (!user || user.deletionRequestedAt) throw new UnauthorizedException('Token reset tidak valid.');
     if (await verify(user.passwordHash, dto.newPassword)) {
       throw new ConflictException('Password baru tidak boleh sama dengan password sebelumnya.');
     }
     const consumedUserId = await this.passwordResetOtp.consume(dto.resetToken);
     if (consumedUserId !== userId) throw new UnauthorizedException('Token reset tidak valid.');
     const passwordHash = await hash(dto.newPassword, {type: argon2id});
-    const updated = await this.db.collection('users').updateOne({_id: userId}, {$set:{passwordHash}});
+    const updated = await this.db.collection('users').updateOne({_id: userId, deletionRequestedAt: {$exists: false}}, {$set:{passwordHash}});
     if (updated.matchedCount !== 1) throw new UnauthorizedException('Token reset tidak valid.');
     await this.db.collection('authSessions').deleteMany({userId});
     return {message: 'Kata sandi diperbarui. Silakan masuk kembali.'};

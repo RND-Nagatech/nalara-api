@@ -2,6 +2,44 @@
 
 API REST NALARA untuk akun Guru, portal Siswa/Orang Tua, siswa, jadwal, presensi, target belajar, laporan, notifikasi, keluarga, referral, dan langganan. Backend menggunakan NestJS + MongoDB replica set + Redis.
 
+## Logo privat dan PDF laporan
+
+Logo termasuk entitlement **branding Tutor Pro dan Trial aktif**; Basic tidak mendapat custom branding. Tidak mengubah harga atau menambah paket. `GET/POST/DELETE /api/v1/tutor-tools/branding/logo` memakai sesi Guru/workspace server, bukan URL publik atau workspace dari client. POST multipart hanya menerima satu field file bernama `file`; PNG/JPEG maksimal 2 MB dan 4 megapiksel. Sharp memeriksa/men-decode gambar, membuang metadata dan menormalisasi ke PNG maksimal 512 × 512. SVG, URL remote dan attachment umum tidak didukung.
+
+Default penyimpanan `backend_bimbel/uploads/branding/<workspace-UUID>/<logo-UUID>.png` ketika API dijalankan dari folder backend. `UPLOADS_DIR` dapat menunjuk direktori privat lain; path relatif mengikuti working directory. Direktori/file dibatasi 0700/0600, nama dihasilkan server, validasi path menolak traversal/symlink. Jangan mengekspos folder ini melalui static hosting. API logo memakai `Cache-Control: no-store`; preview dikirim sebagai base64 ke Guru yang berhak. Penyimpanan logo terpisah dari tombol simpan teks identitas.
+
+Compose memasang volume `uploads-data:/app/uploads` dan `UPLOADS_DIR=/app/uploads`. **Cadangkan volume bersama database**; jangan memakai volume sementara. Beberapa replika API harus berbagi penyimpanan yang sama atau nanti dimigrasikan ke object storage. Logo lama dibersihkan setelah transaksi penggantian/penghapusan berhasil; kegagalan cleanup dicatat `branding.logo.cleanup_pending` untuk tindak lanjut operator, belum ada worker GC penggantian tersendiri. Worker penghapusan akun menghapus seluruh logo generated workspace tersebut, termasuk sisa penggantian, dan retry saat penyimpanan gagal (`account.deletion.logo_cleanup_pending`). Tidak menghapus file workspace lain atau backup di luar volume.
+
+Ekspor PDF memakai data laporan aktual, timezone jadwal, logo/nama/tagline/warna/footer, metadata siswa dan presensi, bagian bernomor, label draf/visibilitas serta halaman lanjutan/nomor halaman. Kontrak JSON `{filename,mimeType,contentBase64}` tetap sama, dibuat di memori; PDF tidak disimpan ke uploads. Font static `assets/report-fonts` ikut image Docker dan tidak diunduh saat request. Turunan Inter/Lora diberi nama NalaraSans/NalaraSerif dan menyertakan lisensi OFL. Regenerasi dev opsional: pasang FontTools lalu jalankan `python scripts/prepare-report-fonts.py`; font sumber Flutter tidak diubah.
+
+`npm run test:branding` masuk `verify:source`: pemeriksaan normalisasi gambar, tenant/path, transaksi, kegagalan penyimpanan, entitlement serta renderer PDF terisolasi. Preview fiktif opsional `node scripts/preview-report-pdf.cjs` hanya memanggil renderer, tidak memulai aplikasi atau mengakses data pengguna. [Kontrak](../docs/API.md) dan [hasil pemeriksaan](../docs/VERIFICATION.md).
+
+## Hapus akun Guru
+
+Menu Flutter **Lainnya → Hapus akun** memakai `GET /api/v1/account-deletion` (ringkasan aktual) dan `DELETE` path yang sama. Backend memverifikasi kata sandi atau Firebase ID token Google yang sama, belum dicabut, dengan `auth_time` maksimal 5 menit. Memerlukan persetujuan dan konfirmasi eksplisit; tidak menerima target user/workspace dari client. Tetap tersedia ketika langganan berakhir.
+
+Respons **202/pending** berarti permintaan diterima, bukan seluruh data telah hilang. Transaksi segera menutup akses Guru/portal, sesi, perangkat, kode referral dan push tertunda; job Mongo durable menghapus data workspace permanen secara otomatis, tanpa tinjauan admin. Worker mencoba ulang saat database/Firebase/SingaPay bermasalah. Identitas Firebase aplikasi dihapus, **bukan akun Google pengguna**. Link pembayaran terbuka diperiksa/dibatalkan melalui alur provider existing; tidak ada refund/charge baru. Catatan provider/backup di luar database tidak diklaim terhapus oleh worker ini.
+
+Default `ACCOUNT_DELETION_INTERVAL_SECONDS=60`, `ACCOUNT_DELETION_BATCH_SIZE=5` (lihat `.env.example`). Per koleksi maksimal 500 record per pass, order maksimal 20. Lease dan checkpoint difence dengan claim ID. Penanda teknis minimal (ID internal, status/waktu, fingerprint UID) diperiksa kembali harian untuk membersihkan late writes; UID asli dihapus dari job setelah cleanup Firebase. Operator perlu memantau `account.deletion.*`, permintaan tertunda dan status completion; jangan menghapus tombstone sebagai troubleshooting.
+
+`npm run test:account-deletion` termasuk `verify:source`: fake database/provider, tanpa server atau data nyata. Restart/deploy backend terbaru perlu dilakukan pengguna; proses berjalan tidak diubah otomatis. Scope saat ini akun Guru; self-service penghapusan portal independen, URL web penghapusan untuk distribusi Play dan kebijakan retensi/backup produksi masih gerbang rilis. [Kontrak](../docs/API.md), [verifikasi](../docs/VERIFICATION.md).
+
+## Panduan persiapan mengajar
+
+`GET /api/v1/teaching-guide` mengembalikan milestone bidang belajar, siswa, jadwal, dan target dari record workspace milik principal Guru. Client tidak dapat menandai langkah selesai. Data existing/arsip/batal dikenali sebagai langkah persiapan yang pernah dilakukan. Langkah opsional Orang Tua membutuhkan akun parent aktif dengan siswa aktif pada family/workspace yang sama; respons hanya boolean, bukan data akun atau anak.
+
+`PATCH /api/v1/teaching-guide/preferences` menerima tepat `{dismissed: boolean}` dan memperbarui `users.teachingGuideDismissed` untuk akun/workspace principal. Field baru default false; akun lama tanpa field tetap kompatibel, tanpa migrasi isi database manual. Preferensi ini boleh disimpan setelah langganan berakhir, tetapi tidak mengaktifkan paket atau membolehkan mutasi data belajar. Kedua endpoint menggunakan AuthGuard Guru existing, tidak public/portal.
+
+`npm run test:teaching-guide` menjalankan pemeriksaan source terisolasi dengan fake database; sekarang termasuk dalam `verify:source`. Tidak bootstrap Nest, menjalankan server, menghasilkan dist atau menghubungi Mongo/Redis/provider. [Kontrak API](../docs/API.md) dan [hasil verifikasi](../docs/VERIFICATION.md).
+
+## Pemeriksaan source dan hardening SaaS
+
+`npm run verify:source` menjalankan typecheck tanpa emit, lint, tes hardening terisolasi dan tes kebijakan langganan. Tidak memulai Nest, listener, koneksi database/Redis/Firebase/SingaPay, atau menghasilkan dist. Jangan gunakan `npm test` sebagai pengganti ketika build/runtime tidak diizinkan: script tersebut membuild aplikasi dan menjalankan E2E.
+
+OTP kini diverifikasi melalui satu script Lua Redis (termasuk counter, TTL, konsumsi dan reset token). Tes Redis nyata tersedia opt-in melalui `RUN_REDIS_INTEGRATION=true npm run test:otp:redis`, hanya terhadap Redis development/disposable yang sudah berjalan; default host lokal, DB 15, prefix email UUID. Tidak memakai FLUSHDB/FLUSHALL dan belum dijalankan dalam batch ini. Set `REDIS_TEST_HOST`, `REDIS_TEST_PORT`, `REDIS_TEST_DB`, `REDIS_TEST_PASSWORD` bila diperlukan. Redis standalone 7.4 existing didukung; script dua key belum ditujukan untuk Redis Cluster.
+
+Target distribusi adalah Google Play dan App Store. Integrasi pembelian store, opsi login iOS, signing produksi, penghapusan akun, backup/monitoring dan validasi runtime masih menjadi gerbang rilis terpisah. [Roadmap dan status aktual](../docs/SAAS_ROADMAP.md).
+
 ## Jalankan dari nol (development)
 
 ### Prasyarat
@@ -100,7 +138,7 @@ curl http://localhost:3100/api/v1/health/ready
 docker compose stop
 ```
 
-`docker compose down` menghentikan dan menghapus container, tetapi volume data tetap ada. Jangan gunakan `docker compose down -v` kecuali memang ingin menghapus data MongoDB dan Redis development.
+`docker compose down` menghentikan dan menghapus container, tetapi volume data tetap ada. Jangan gunakan `docker compose down -v` kecuali memang ingin menghapus data MongoDB, Redis dan logo uploads development.
 
 ## Portal Siswa
 
@@ -134,7 +172,7 @@ Environment wajib: `MONGODB_URI`, `CORS_ORIGINS` eksplisit, dan `PORT` valid. `.
 | OTP | `PASSWORD_RESET_OTP_TTL_MINUTES` | TTL OTP 1–60 menit, default 5 |
 | Email | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TEST_RECIPIENT` | API key/from wajib production; recipient test hanya non-production |
 | Firebase | `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` atau `GOOGLE_APPLICATION_CREDENTIALS` | Verifikasi Google dan FCM; credential hanya di environment backend |
-| Notifikasi | `NOTIFICATION_DELIVERY_URL`, `NOTIFICATION_DELIVERY_TOKEN`, `NOTIFICATION_SCHEDULER_INTERVAL_MINUTES` | Adapter delivery opsional; interval default 15 menit |
+| Notifikasi | `NOTIFICATION_DELIVERY_URL`, `NOTIFICATION_DELIVERY_TOKEN`, `NOTIFICATION_SCHEDULER_INTERVAL_MINUTES`, `NOTIFICATION_DELIVERY_INTERVAL_SECONDS`, `NOTIFICATION_DELIVERY_BATCH_SIZE` | Adapter opsional; generator H-1 15 menit, worker delivery 15 detik/25 event |
 | Seed | `SEED_EMAIL`, `SEED_PHONE`, `SEED_PASSWORD` | Hanya untuk seed development |
 | Pembayaran | `SINGAPAY_ENABLED`, `SINGAPAY_ENVIRONMENT`, `SINGAPAY_*` | Default nonaktif; credential wajib jika diaktifkan |
 
@@ -229,7 +267,7 @@ Field `workspaceId` berarti data hanya boleh dibaca oleh Guru/portal yang mempun
 | `histories` | `workspaceId`, `targetId`, `planId`, `studentId`, `before`, `after`, `note`, `actorId`, `sessionId?`, `visibility=teacher\|student\|shared` |
 | `reports` | `workspaceId`, `sessionId` unik per sesi, `studentId`, `topic`, `summary`, `targetIds[]`, `observations`, `difficulties`, `homework`, `recommendation`, `visibility`, `status=draft\|published`, `publishedAt?` |
 | `invitations` | `workspaceId`, `studentId?`, `familyId?`, `audience=student\|parent`, `tokenHash`, `expiresAt`, `revokedAt?`, `redeemedAt?` |
-| `notifications` | `workspaceId`, `recipientAccountId?`, `title`, `body`, `route`, `readAt?`, `eventKey` unik per workspace, `deliveryStatus=pending\|delivering\|delivered`, `deliveryAttempts`, `lastDeliveryError?` |
+| `notifications` | `workspaceId`, `recipientAccountId?`, `title`, `body`, `route`, `readAt?`, `eventKey` unik per workspace, `deliveryStatus=pending\|delivering\|delivered\|suppressed\|failed`, attempts/backoff/claim/lease, hash hasil perangkat, adapter checkpoint, optional expiry |
 | `notificationDevices` | `workspaceId`, `accountId`, `accountType=teacher\|parent\|student`, `token` unik, `platform=android\|ios\|web`, `lastSeenAt` |
 | `rescheduleRequests` | `workspaceId`, `sessionId`, `familyId`, `parentAccountId`, `studentId`, waktu lama/permintaan/usulan, `reason`, `status=pending\|approved\|rejected\|cancelled\|expired`, reviewer dan waktu review |
 | `audits` | `workspaceId`, `actorId`, `action`, `resourceId` |
@@ -267,7 +305,11 @@ Update progress membutuhkan `version` dari GET target. Konflik menghasilkan 409.
 
 Detail siswa memakai `GET /students/:id/summary`: mean kanonis seluruh target eligible siswa, jumlah target, tujuh hari tren berdasarkan history target yang masih eligible, serta jumlah/rate target selesai pada plan yang periodenya beririsan dengan minggu Senin–Minggu menurut timezone principal. Tidak bergantung pagination daftar; tidak ada target menghasilkan null dan tanpa history menghasilkan tren kosong. Query read-only melakukan UUID/workspace authorization, lookup history/plan terscope, satu aggregate snapshot dan batas waktu 10 detik; tidak menerima clock/ownership client. Nilai hari ini memakai snapshot yang sama dengan angka utama. Detail semantics terdapat di [API](../docs/API.md#ringkasan-detail-siswa). Endpoint baru ini memerlukan backend source terbaru; pembaruan source tidak menjalankan backend, build, migrasi atau seed.
 
-Catatan `teacher` tidak menghasilkan notifikasi dibagikan. Laporan draft tidak mengirim notifikasi; publish idempoten menghasilkan notifikasi hanya ke Orang Tua yang terhubung dengan keluarga siswa. Provider notifikasi berjalan setelah commit. Record tetap terlihat dalam aplikasi jika provider eksternal gagal, dan `POST /notifications/:id/retry` dapat mencoba ulang maksimal 10 kali. Lease pengiriman yang terhenti dapat dicoba ulang setelah 5 menit.
+Catatan `teacher` tidak menghasilkan notifikasi dibagikan. Laporan draft tidak mengirim notifikasi; publish idempoten mengikuti visibility student/shared dan penerima portal terkait. Provider berjalan setelah commit, dengan pemulihan otomatis melalui worker outbox Mongo setiap 15 detik (batch 25, concurrency 4). Hasil terminal per perangkat disimpan sebagai hash token/pemilik; kegagalan sementara memakai backoff/jitter dan berhenti setelah 10 percobaan sebagai `failed`. Lease baru 2 menit dengan claim ID; legacy tanpa lease memakai updatedAt 5 menit. Record inbox tidak dihapus ketika push gagal.
+
+`POST /notifications/:id/retry` dibatasi 5/menit, mengulang pending segera atau membuka siklus baru untuk failed (diaudit, checkpoint perangkat tetap dipertahankan); suppressed/delivered tidak dibuka ulang. Penerima, workspace, anak/keluarga aktif dan visibility diperiksa ulang sebelum pengiriman/adapter. Cabut akses menonaktifkan pending/delivering serta menghapus token perangkat di dalam transaksi; registrasi portal juga menulis lock versi akun aktif. H-1 baru memiliki deadline sebelum hari target/jadwal dimulai. Push yang sudah diterima FCM tidak dapat ditarik kembali oleh backend.
+
+Jaminan delivery adalah at-least-once, bukan exactly-once: crash setelah FCM menerima push tetapi sebelum checkpoint tersimpan masih dapat menyebabkan pengulangan. `delivered` bukan bukti pesan dibaca/perangkat menampilkan notifikasi; readAt adalah status inbox terpisah. Adapter HTTPS menerima `audience:{accountType,accountIds}` dan wajib menghormati scope serta Idempotency-Key, bukan broadcast workspace.
 
 Push Firebase memakai `NotificationDevice` yang terikat pada `accountId`, `workspaceId`, dan token perangkat. Backend mengirim push ke penerima yang tepat: Guru berdasarkan akun Guru, sedangkan Orang Tua/Siswa berdasarkan relasi portal aktif siswa. Event presensi hadir, target baru, laporan terbit, target H-1, dan jadwal les H-1 memakai `eventKey` idempoten. Record dibuat durable dalam transaksi untuk event teaching utama, lalu delivery FCM dilakukan setelah commit. `NOTIFICATION_SCHEDULER_INTERVAL_MINUTES` mengatur pemeriksaan pengingat H-1 (default 15 menit).
 

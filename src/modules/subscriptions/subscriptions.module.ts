@@ -8,6 +8,7 @@ import { ListQuery } from '../../common/query.dto';
 import { SubscriptionsService } from './subscriptions.service';
 import { BillingService } from './billing.service';
 import { SingaPayProvider } from './singapay.provider';
+import { BillingReconciliationWorker } from './billing-reconciliation-worker.service';
 class CheckoutDto { @ApiProperty({enum: ['basic', 'pro']}) @IsIn(['basic', 'pro']) plan!: 'basic' | 'pro'; }
 @ApiBearerAuth() @ApiTags('Subscriptions') @Controller('subscriptions')
 export class SubscriptionsController {
@@ -27,5 +28,5 @@ export class SubscriptionsController {
     return this.billing.webhook(req.rawBody.toString('utf8'), req.headers);
   }
 }
-@Global() @Module({controllers: [SubscriptionsController], providers: [SubscriptionsService, BillingService, SingaPayProvider], exports: [SubscriptionsService]})
+@Global() @Module({controllers: [SubscriptionsController], providers: [SubscriptionsService, BillingService, SingaPayProvider, BillingReconciliationWorker], exports: [SubscriptionsService, BillingService]})
 export class SubscriptionsModule {}

@@ -14,7 +14,7 @@ export class AuthGuard implements CanActivate {
     const session = await this.db.collection('authSessions').findOne({accessHash:tokenHash(token), accessExpiresAt:{$gt:new Date()}, expiresAt:{$gt:new Date()}}).lean();
     if (!session) throw new UnauthorizedException('Sesi telah berakhir');
     const user = await this.db.collection('users').findById(session.userId).lean();
-    if (!user) throw new UnauthorizedException('Sesi tidak valid');
+    if (!user || user.deletionRequestedAt) throw new UnauthorizedException('Sesi tidak valid');
     if (user.role !== 'teacher') throw new ForbiddenException('Akses khusus guru');
     req.user = safeUser(user); req.sessionId = session._id;
     return true;

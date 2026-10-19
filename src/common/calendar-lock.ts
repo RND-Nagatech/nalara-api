@@ -6,7 +6,7 @@ import { Database } from '../database/database.module';
 // Concurrent transactions retry against a fresh snapshot instead of committing
 // overlapping writes to different occurrence documents.
 export async function lockCalendar(db: Database, workspaceId: string, session: ClientSession) {
-  const result = await db.collection('workspaces').updateOne({ _id: workspaceId }, { $inc: { scheduleVersion: 1 } }, { session });
+  const result = await db.collection('workspaces').updateOne({ _id: workspaceId, deletionRequestedAt: { $exists: false } }, { $inc: { scheduleVersion: 1 } }, { session });
   if (!result.matchedCount) throw new NotFoundException('Ruang kerja tidak ditemukan');
 }
 
