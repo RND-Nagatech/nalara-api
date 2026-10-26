@@ -10,7 +10,8 @@ export async function lockCalendar(db: Database, workspaceId: string, session: C
   if (!result.matchedCount) throw new NotFoundException('Ruang kerja tidak ditemukan');
 }
 
-export async function requireFreeSlot(db: Database, workspaceId: string, startAt: Date, endAt: Date, session: ClientSession, exceptId?: string) {
-  const overlap = await db.collection('sessions').exists({ workspaceId, status: { $ne: 'cancelled' }, ...(exceptId ? { _id: { $ne: exceptId } } : {}), startAt: { $lt: endAt }, endAt: { $gt: startAt } }).session(session);
+export async function requireFreeSlot(db: Database, workspaceId: string, startAt: Date, endAt: Date, session: ClientSession, exceptId?: string | readonly string[]) {
+  const excluded = typeof exceptId === 'string' ? [exceptId] : exceptId;
+  const overlap = await db.collection('sessions').exists({ workspaceId, status: { $ne: 'cancelled' }, ...(excluded ? { _id: { $nin: excluded } } : {}), startAt: { $lt: endAt }, endAt: { $gt: startAt } }).session(session);
   if (overlap) throw new ConflictException('Waktu yang dipilih sudah digunakan. Pilih slot lain.');
 }

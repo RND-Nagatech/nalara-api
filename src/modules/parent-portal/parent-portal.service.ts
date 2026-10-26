@@ -56,12 +56,12 @@ export class ParentPortalService {
 
   private async names<T extends { studentId: string; subjectId?: string }>(workspaceId: string, rows: readonly T[]) {
     const [students, subjects] = await Promise.all([
-      this.db.collection('students').find({ workspaceId, _id: { $in: rows.map((row) => row.studentId) } }).select('_id name grade status').lean(),
+      this.db.collection('students').find({ workspaceId, _id: { $in: rows.map((row) => row.studentId) } }).select('_id name grade status avatarId').lean(),
       this.db.collection('subjects').find({ workspaceId, _id: { $in: rows.map((row) => row.subjectId).filter((id): id is string => Boolean(id)) } }).select('_id name').lean(),
     ]);
     const studentMap = new Map(students.map((student) => [student._id, student]));
     const subjectMap = new Map(subjects.map((subject) => [subject._id, subject.name]));
-    return rows.map((row) => ({ ...row, studentName: studentMap.get(row.studentId)?.name ?? '', studentGrade: studentMap.get(row.studentId)?.grade ?? '', studentStatus: studentMap.get(row.studentId)?.status, subjectName: subjectMap.get(row.subjectId ?? '') ?? '' }));
+    return rows.map((row) => ({ ...row, studentName: studentMap.get(row.studentId)?.name ?? '', studentAvatarId: studentMap.get(row.studentId)?.avatarId ?? null, studentGrade: studentMap.get(row.studentId)?.grade ?? '', studentStatus: studentMap.get(row.studentId)?.status, subjectName: subjectMap.get(row.subjectId ?? '') ?? '' }));
   }
 
   private async namedReports(workspaceId: string, reports: readonly LessonReport[]) {
@@ -78,7 +78,7 @@ export class ParentPortalService {
   private async planWithTargets(account: FamilyAccount, plan: LearningPlan) {
     const targets = await this.db.collection('targets').find({ workspaceId: account.workspaceId, planId: plan._id, studentId: plan.studentId, subjectId: plan.subjectId }).sort({ createdAt: 1, _id: 1 }).lean();
     const [named] = await this.names(account.workspaceId, [{ studentId: plan.studentId, subjectId: plan.subjectId }]);
-    return { ...plan, targets, ...aggregateProgress(targets), studentName: named.studentName, studentGrade: named.studentGrade, studentStatus: named.studentStatus, subjectName: named.subjectName };
+    return { ...plan, targets, ...aggregateProgress(targets), studentName: named.studentName, studentAvatarId: named.studentAvatarId, studentGrade: named.studentGrade, studentStatus: named.studentStatus, subjectName: named.subjectName };
   }
 
   private async targetItems(account: FamilyAccount, targets: readonly Target[]) {
@@ -197,7 +197,12 @@ export class ParentPortalService {
     const reports = await this.db.collection('reports').find({ workspaceId: account.workspaceId, studentId: lesson.studentId, sessionId: lesson._id, ...parentVisibility, status: 'published' }).sort({ publishedAt: -1, createdAt: -1, _id: -1 }).lean();
     const [namedLesson] = await this.names(account.workspaceId, [lesson]);
     const [namedSchedule] = await this.names(account.workspaceId, [schedule]);
-    return { lesson: namedLesson, schedule: namedSchedule, reports: await this.namedReports(account.workspaceId, reports) };
+    // Expose only a lock flag, never another parent's reason, identity or request.
+    const pending = lesson.status === 'scheduled' && lesson.startAt > new Date()
+      ? await this.db.collection('rescheduleRequests').findOne({ workspaceId: account.workspaceId, sessionId: lesson._id, studentId: lesson.studentId, familyId: account.familyId, status: 'pending', oldStartAt: lesson.startAt, oldEndAt: lesson.endAt }).select('requestedStartAt proposedStartAt').lean()
+      : null;
+    const reschedulePending = !!pending && (pending.proposedStartAt ?? pending.requestedStartAt) > new Date();
+    return { lesson: namedLesson, schedule: namedSchedule, reports: await this.namedReports(account.workspaceId, reports), reschedulePending };
   }
 
   async plans(account: FamilyAccount, query: ListQuery) {
@@ -269,13 +274,14 @@ export class ParentPortalService {
     // before a child was moved to another family. Recipient ID alone is stale.
     const children = await this.children(account);
     const childScope = { workspaceId: account.workspaceId, studentId: { $in: children.map((child) => child._id) } };
-    const [sessions, plans, reports, assignments, histories, requests] = await Promise.all([
+    const [sessions, plans, reports, assignments, histories, requests, tuitionFees] = await Promise.all([
       this.db.collection('sessions').find(childScope).select('_id').lean(),
       this.db.collection('plans').find(childScope).select('_id').lean(),
       this.db.collection('reports').find({ ...childScope, ...parentVisibility, status: 'published' }).select('_id').lean(),
       this.db.collection('assignments').find({ ...childScope, visibility: 'shared', status: 'published' }).select('_id').lean(),
       this.db.collection('histories').find({ ...childScope, ...parentVisibility }).select('_id').lean(),
       this.db.collection('rescheduleRequests').find({ ...childScope, familyId: account.familyId, parentAccountId: account._id }).select('_id').lean(),
+      this.db.collection('tuitionFees').find({...childScope, studentId: {$in: children.filter(child => child.status === 'active').map(child => child._id)}, status: 'unpaid'}).select('_id version dueDate').lean(),
     ]);
     const routes = [
       ...sessions.map((row) => `/parent/sessions/${row._id}`),
@@ -286,6 +292,7 @@ export class ParentPortalService {
     const eventKeys = [
       ...histories.map((row) => `progress:${row._id}:parent:${account._id}`),
       ...requests.flatMap((row) => [`reschedule-proposal:${row._id}`, `reschedule-review:${row._id}`, `reschedule-parent-response:${row._id}`]),
+      ...tuitionFees.flatMap(fee => ['today', 'tomorrow'].map(stage => `tuition-due:${fee._id}:${fee.version}:${fee.dueDate}:${stage}:parent:${account._id}`)),
     ];
     return { workspaceId: account.workspaceId, recipientAccountId: account._id, $or: [{ route: { $in: routes } }, { eventKey: { $in: eventKeys } }] };
   }
@@ -382,7 +389,7 @@ export class ParentPortalService {
         if (!child) throw new NotFoundException('Sesi tidak ditemukan');
         if (await this.conflict(account.workspaceId, startAt, endAt, session._id, transaction)) throw new ConflictException('Waktu yang dipilih sudah digunakan. Pilih slot lain.');
         const existing = await this.db.collection('rescheduleRequests').exists({ workspaceId: account.workspaceId, sessionId: session._id, status: 'pending' }).session(transaction);
-        if (existing) throw new ConflictException('Permintaan perubahan tanggal untuk sesi ini masih menunggu persetujuan Guru.');
+        if (existing) throw new ConflictException({code:'RESCHEDULE_PENDING', message:'Permintaan perubahan tanggal untuk sesi ini masih menunggu persetujuan Guru.'});
         const [request] = await this.db.collection('rescheduleRequests').create([{ workspaceId: account.workspaceId, sessionId: session._id, familyId: account.familyId!, parentAccountId: account._id, studentId: session.studentId, oldStartAt: session.startAt, oldEndAt: session.endAt, requestedStartAt: startAt, requestedEndAt: endAt, reason: dto.reason.trim() }], { session: transaction });
         const notificationIds = await this.notificationsEvents.create([{ workspaceId: account.workspaceId, title: 'Permintaan perubahan jadwal', body: 'Orang tua meminta perubahan jadwal untuk satu sesi.', route: '/teacher/reschedule-requests', eventKey: `reschedule-request:${request._id}` }], transaction);
         return { request: request.toObject(), notificationIds };
@@ -390,7 +397,7 @@ export class ParentPortalService {
       await this.notificationsEvents.deliverAfterCommit(result.notificationIds);
       return result.request;
     } catch (error) {
-      if ((error as { code?: number }).code === 11000) throw new ConflictException('Permintaan perubahan tanggal untuk sesi ini masih menunggu persetujuan Guru.');
+      if ((error as { code?: number }).code === 11000) throw new ConflictException({code:'RESCHEDULE_PENDING', message:'Permintaan perubahan tanggal untuk sesi ini masih menunggu persetujuan Guru.'});
       throw error;
     }
   }

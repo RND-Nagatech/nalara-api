@@ -1,6 +1,6 @@
-import { IsBoolean } from 'class-validator';
+import { Equals } from 'class-validator';
 
 export class TeachingGuidePreferencesDto {
-  @IsBoolean({message: 'Pilihan tampilan panduan harus berupa boolean.'})
-  dismissed!: boolean;
+  @Equals(true, {message: 'Status tutorial harus bernilai true.'})
+  tutorialSeen!: true;
 }

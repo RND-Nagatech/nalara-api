@@ -11,7 +11,7 @@ export class TeachingGuideService {
     // Milestones are inferred from stored records, never client-supplied flags.
     // Archived/cancelled records still show that an existing tutor has done setup.
     const [user, subject, student, schedule, target, parents] = await Promise.all([
-      this.db.collection('users').findOne({_id: actor._id, workspaceId}).select('teachingGuideDismissed').lean(),
+      this.db.collection('users').findOne({_id: actor._id, workspaceId}).select('teachingTutorialSeen').lean(),
       this.db.collection('subjects').exists({workspaceId}),
       this.db.collection('students').exists({workspaceId}),
       this.db.collection('schedules').exists({workspaceId}),
@@ -37,7 +37,7 @@ export class TeachingGuideService {
     ]);
     if (!user) throw new NotFoundException('Akun Guru tidak ditemukan.');
     return {
-      dismissed: user.teachingGuideDismissed === true,
+      tutorialSeen: user.teachingTutorialSeen === true,
       hasSubject: !!subject,
       hasStudent: !!student,
       hasSchedule: !!schedule,
@@ -46,13 +46,13 @@ export class TeachingGuideService {
     };
   }
 
-  async preferences(actor: Principal, dismissed: boolean) {
+  async preferences(actor: Principal) {
     const user = await this.db.collection('users').findOneAndUpdate(
       {_id: actor._id, workspaceId: actor.workspaceId},
-      {$set: {teachingGuideDismissed: dismissed}},
+      {$set: {teachingTutorialSeen: true}},
       {new: true, runValidators: true},
-    ).select('teachingGuideDismissed').lean();
+    ).select('teachingTutorialSeen').lean();
     if (!user) throw new NotFoundException('Akun Guru tidak ditemukan.');
-    return {dismissed: user.teachingGuideDismissed === true};
+    return {tutorialSeen: user.teachingTutorialSeen === true};
   }
 }

@@ -1,6 +1,92 @@
 # NALARA API
 
+## Alasan pembatalan sesi
+
+Guru wajib mengirim `cancellationReason` (string trimmed 3–500 karakter) saat membatalkan sesi/seri, termasuk jalur presensi cancelled legacy. Validasi DTO dan service menolak alasan kosong/tidak valid atau reason-only edit sebelum menulis. Field optional baru disimpan pada schedule/session agar data batal lama tetap kompatibel; tidak ada migrasi/backfill, dependency atau env baru.
+
+Pembatalan satu occurrence/kelompok, following, dan seluruh seri tetap dibatasi workspace dan transaksi calendar lock. Hanya sesi scheduled/pending yang berubah; completed dan alasan pembatalan sebelumnya tidak ditimpa. Portal existing mengirim alasan sesi anak yang berhak, bukan roster atau alasan permintaan reschedule privat. Tidak menambah push otomatis. Terapkan backend/Flutter bersama lalu restart API; client lama tanpa alasan akan ditolak. [Payload dan batas](../docs/API.md#alasan-pembatalan-sesi).
+
+## Izin notifikasi di aplikasi
+
+Flutter sekarang memakai dialog pembuka NALARA sebelum memanggil izin resmi perangkat/browser. Startup/aktivasi role tidak meminta izin otomatis; perangkat hanya mendaftar setelah status OS authorized/provisional dan sesi akun aktif. Nanti saja adalah keputusan lokal instalasi, bukan preferensi notifikasi server atau perubahan entitlement. Tidak ada endpoint/env/schema/worker baru dan tidak perlu deploy backend khusus perubahan dialog ini. Scope perangkat, visibilitas data, event/outbox, FCM/APNs dan preferensi Guru existing tetap berlaku. Lihat [alur Flutter](../flutter-apk/README.md#dialog-izin-notifikasi-nalara).
+
+## Laporan sesi untuk beberapa siswa
+
+`POST /api/v1/sessions/:sessionId/reports/batch` menerima konten bersama, `status: draft|published`, `visibility` existing dan 1–100 `entries` unik `{sessionId,targetIds?}`. Semua harus peserta occurrence/interval/bidang yang sama dalam workspace Guru. Target evaluasi diverifikasi per anak. Transaksi di bawah calendar lock membuat record privat laporan/audit/outbox per siswa, bukan satu laporan berisi roster. Satu peserta invalid atau sudah punya laporan menolak seluruh batch tanpa overwrite; unique workspace/session tetap dijaga. Draft tidak mengirim notifikasi; publish mengirim sesuai visibilitas, hanya setelah commit. Endpoint single/edit/publish tetap kompatibel. Tidak menambah env/dependency/schema/index.
+
+`npm run test:report-batch` memeriksa DTO, relasi/privasi, rollback, duplicate dan audience dengan fake/source checks; termasuk `verify:source`, bukan bukti transaksi Mongo atau push perangkat nyata. Terapkan backend/Flutter terbaru bersama dan restart API. [Kontrak](../docs/API.md#laporan-sesi-untuk-beberapa-siswa).
+
+## Badge laporan draf di Flutter
+
+Catatan badge laporan Flutter: client membaca `GET /api/v1/reports?page=1&limit=1&status=draft` dan memakai metadata `total` pada PageResult existing untuk menghitung seluruh draf workspace principal. Tidak ada endpoint/counter/schema baru atau perubahan kontrak; daftar portal tetap published-only sesuai visibilitas. UI membaca ulang setelah write terkonfirmasi, kembali ke menu atau resume, bukan polling. [Panduan badge](../flutter-apk/README.md#badge-laporan-yang-masih-draf).
+
+## Preferensi zona waktu Guru
+
+Di Flutter, zona akun diubah hanya dari Pengaturan. Form jadwal baru mengikuti hasil simpan yang sudah dikonfirmasi dan menawarkan shortcut ke Pengaturan, tanpa dropdown zona terpisah. Endpoint jadwal tetap menerima `timezone` untuk menyimpan zona seri dan kompatibilitas client lama; tidak ada perubahan kontrak/validasi backend atau penulisan ulang jadwal existing untuk pemusatan UI ini.
+
+`PATCH /api/v1/me/timezone` menerima tepat `{ "timezone": "Asia/Makassar" }`. Pilihan valid Asia/Jakarta (WIB/UTC+7), Asia/Makassar (WITA/UTC+8), Asia/Jayapura (WIT/UTC+9); respons envelope `data:{timezone}`. Endpoint authenticated/self-only mengikat akun/workspace dari principal, menolak field tambahan, role portal, akun hilang atau sedang dihapus. Tersedia tanpa entitlement Pro atau paket aktif. Update atomik hanya `users.timezone`; credential/avatar, UTC sessions dan zona/pola schedules tidak disentuh. Default schema akun lama tetap Jakarta; tidak perlu seed atau migrasi.
+
+Pembacaan principal berikutnya mengambil timezone user terkini dari DB, sehingga Home/rentang kalender, ringkasan dan pengingat biaya/target mengikuti zona akun. Scheduler H-1 **sesi** mencari kandidat mendatang terbatas 72 jam, lalu memilih hari esok berdasarkan zona seri dalam workspace yang sama; label WIB/WITA/WIT (atau IANA legacy) disertakan di pesan. Deadline delivery adalah midnight zona seri. Pergantian preferensi akun tidak mengubah eventKey/deadline seri yang sama, repeat, gate Pro/Trial, preferensi notifikasi, grouping Guru atau privasi pesan per-anak. Fallback zona akun hanya untuk legacy occurrence tanpa seri yang ditemukan. Tidak ada notifikasi nyata dipicu dari update preferensi.
+
+`npm run test:teacher-profile` dan `test:hardening` mencakup scope, whitelist, pelestarian jadwal serta perbedaan midnight WIB/WITA/WIT; masuk `verify:source`. Ini fake/source checks, bukan pengujian push atau database nyata. Deploy/restart API dan hot restart Flutter terbaru bersama. [Kontrak](../docs/API.md#zona-waktu-akun-guru).
+
+## Status pengajuan perubahan jadwal di detail Parent
+
+`GET /portal/sessions/:id/overview` menambah boolean `reschedulePending`. Hanya sesi milik anak dalam keluarga aktif yang diotorisasi; flag mengikuti satu request pending pada interval sesi dan keluarga terkini dengan waktu diminta/tawaran masih di masa depan. Tidak mengirim ID/identitas/alasan request milik akun Parent lain; satu sesi tetap terkunci bila diajukan akun lain dalam keluarga yang sama. Request resolved/stale tidak mengunci pengajuan baru.
+
+Request ganda mendapat HTTP 409 dengan code `RESCHEDULE_PENDING` dan pesan Indonesia existing; shared calendar lock, unique partial index `one_pending_reschedule_per_session`, expiry dan validasi slot dalam transaksi tetap dipertahankan. Tidak ada perubahan schema/index/migrasi dan tidak ada update waktu sesi dari flag ini. Ini bukan endpoint pembayaran/langganan. `test:schedule-groups` juga mencakup scope pending flag dan pemulihan ketika response gagal setelah commit. Restart/deploy API dan hot restart Flutter terbaru bersama.
+
+## Presensi dibuka saat sesi dimulai
+
+Endpoint presensi tunggal dan batch kelompok memvalidasi `startAt <= waktu server` di transaksi kalender yang sama setelah pemeriksaan pending/scheduled. Sebelum waktunya, response 400 dengan pesan “Presensi tersedia saat sesi dimulai.”; tidak ada penulisan presensi/outbox dan batch tetap all-or-nothing. Boundary tepat jam mulai diperbolehkan, termasuk pencatatan setelah jam berakhir; write-once dan workspace/member guard tetap berlaku. Pembatalan melalui endpoint kelola jadwal tidak diblokir aturan presensi ini. Tidak ada perubahan DTO, timezone penyimpanan, schema, scheduler atau notifikasi push. `test:schedule-groups` mencakup future single/batch, rollback, tepat start, terlambat dan cancellation. Status timeline Flutter hanya tampilan waktu, bukan completion otomatis. Restart/deploy API dan hot restart Flutter terbaru bersama.
+
+Catatan client Chrome: startup web sekarang terpisah dari inisialisasi Google/Firebase Web opsional. Email/nomor HP/reset/referral tetap memakai API existing. Google web memakai public Web config project Firebase yang sama dengan Firebase Admin backend, bukan menyalin service-account JSON ke Flutter. Provider Google dan authorized domains perlu disiapkan pemilik project; tidak ada perubahan credential, endpoint, scope atau CORS otomatis pada backend. [Panduan web](../flutter-apk/README.md#chrome-startup-logo-dan-viewport-portrait).
+
+## Tugas & Materi untuk beberapa siswa
+
+`POST /api/v1/tutor-tools/assignments/batch` menerima `studentIds` berisi 1–100 UUID unik dan konten Assignment existing (tanpa `studentId` tunggal). Entitlement `assignments` Pro/Trial tetap berlaku. Validasi seluruh siswa aktif dan bidang di workspace principal dilakukan dalam transaksi sebelum penulisan; seluruh aktivitas/audit/outbox berhasil bersama atau rollback. Notifikasi hanya setelah commit dan tetap per anak/visibilitas; jawaban tidak dibagikan kepada teman satu grup. Response `{items,total}` berisi record privat per siswa; POST lama dan PATCH satu aktivitas tetap kompatibel. Grup dipakai Flutter sebagai shortcut snapshot; tidak ada groupId/ownership dari client yang dipercaya atau roster otomatis pada aktivitas lama. Tidak menambah schema/env/dependency. [Kontrak](../docs/API.md#tugas-dan-materi-untuk-beberapa-siswa).
+
+`npm run test:assignment-batch` menjalankan source-only fake checks dan masuk `verify:source`; bukan bukti transaksi Mongo/provider nyata. Deploy/restart API dan hot restart Flutter terbaru bersama.
+
+## Repeat jadwal dan seri lanjutan
+
+Schedules mendukung repeatDays (Senin=1–Minggu=7), repeatEnd never/count/until dan tanggal akhir lokal. Payload weekly/repeatCount lama tetap kompatibel. Pola baru menyiapkan hingga delapan minggu di bawah calendar lock yang sama dengan semua penulis jadwal; worker Mongo di SchedulesModule memeriksa setiap 15 menit, maksimal 25 record due, dan menjadwalkan ulang satu jam setelah scan seri. Cursor/child occurrences atomik, tidak ada queue/provider atau Docker tambahan. Requires `recurringSchedules` Pro/Trial aktif; worker tidak membuat trial. Benturan/paket/siswa tidak aktif meninggalkan pesan aman recurrenceError di detail, tanpa menghapus riwayat atau slot lain. Tanggal di luar horizon belum dipesan.
+
+Guru dapat memakai `POST /schedules/:id/repeat` untuk pola lanjutan, atau PATCH sessions dengan scope following untuk ubah waktu/berhenti dari occurrence tertentu. Siswa/bidang diambil dari seri server, presensi tersimpan/exception individual tetap dilindungi. `npm run test:schedule-repeat` adalah pemeriksaan source-only dan masuk `verify:source`. Deploy backend/Flutter bersama; worker hidup saat API aktif. [Kontrak lengkap](../docs/SCHEDULE_REPEAT.md).
+
+## Nomor HP profil Guru
+
+`PATCH /api/v1/me/phone` menerima tepat `{phone:string}` dari sesi Guru, untuk akun Google maupun registrasi biasa. Nomor dinormalisasi dari 08…/628…/+628… ke `+628…`; kosong/format salah/field kepemilikan ditolak 400. Target akun/workspace berasal dari principal dan akun yang sedang dihapus tidak boleh diubah. Unique index canonical `users.phone` menolak nomor yang sudah dipakai akun lain (409), termasuk konflik saat bersamaan. Respons minimal `{phone}` tidak membawa credential atau profil akun lain; email, password, UID Google dan avatar tidak berubah. Tidak ada OTP/verifikasi kepemilikan nomor baru atau perubahan paket. Endpoint self-service tetap tersedia setelah langganan berakhir. Nomor terkini digunakan pada login nomor HP dan kontak WhatsApp Guru dari biaya bimbel Parent.
+
+`npm run test:teacher-profile` adalah source-only checks dengan database tiruan, termasuk DTO, scope, akun Google/normal, konflik indeks dan guard. Masuk `verify:source`; bukan uji Mongo/HP/provider nyata. Terapkan backend dan Flutter terbaru bersama. [Kontrak](../docs/API.md#nomor-hp-profil-guru).
+
+## Biaya bimbel dan pengingat Orang Tua
+
+Aturan terbaru: pengingat Guru mulai hari jatuh tempo, maksimal sekali per hari kalender zona waktu Guru per siswa selama belum lunas. Orang Tua tetap H-1/hari jatuh tempo saja; Siswa tidak menerima. `tuitionTeacherReminders` dan `tuitionParentReminders` disimpan terpisah (default true, termasuk record lama), melalui GET/PATCH `/tutor-tools/notification-preferences`. Audience memeriksa ulang preferensi sebelum push/adapter. Kunci harian Guru tetap saat fee direvisi, sehingga tidak ada event kedua di hari sama; versi terkini dipakai hari berikutnya. Lunasi biaya menghentikan kedua pengingat berikutnya; membaca notifikasi tidak melunasi biaya. Inbox Guru dan badge Home memfilter fee terkini sebelum pagination/count. Tidak ada env/dependency baru. [Kontrak](../docs/API.md#preferensi-pengingat-biaya).
+
+Modul `src/modules/tuition-fees` menyimpan nominal/tanggal/status biaya per siswa dalam koleksi `tuitionFees`. Satu record aktif per workspace+siswa dengan optimistic version; bukan langganan Nalara atau invoice payment gateway. Guru memakai `GET/PATCH /api/v1/students/:id/tuition-fee`, Orang Tua memakai `GET /api/v1/portal/students/:id/tuition-fee` read-only dengan pengecekan membership keluarga terkini. Portal Siswa tidak memperoleh nominal, tanggal, atau endpoint biaya.
+
+Guru mengisi nominal rupiah utuh dan tanggal kalender; penanda lunas menghentikan pengingat berikutnya. Periode berikutnya diisi manual dan mengganti pengaturan aktif sebelumnya. Tidak ada histori invoice, autodebit atau verifikasi transfer. Response menyediakan nomor pemilik workspace yang valid untuk tombol WhatsApp Orang Tua; nomor kosong tetap null. [Kontrak dan batas fitur](../docs/API.md#biaya-bimbel-per-siswa).
+
+Scheduler notifikasi existing mengikuti entitlement `automaticReminders` Pro/Trial aktif; nominal/detail tetap dapat dipakai pada paket lain sesuai akses normal. Revisi/lunas/arsip/pindah keluarga diperiksa ulang sebelum delivery; unique event key menghindari pengulangan scan. Inbox Parent memfilter biaya terkini, dan route kedua peran membuka tab Biaya bimbel. Biaya ikut account-erasure per-workspace.
+
+Tidak ada env/dependency/server baru. Gunakan API dan Flutter terbaru bersama, restart proses API setelah deploy. Scheduler API harus terus berjalan, dan push FCM existing memerlukan konfigurasi/perizinan perangkat yang sudah dipakai notifikasi lain. `npm run test:tuition-fees` menjalankan source checks tanpa server/DB/provider, termasuk dalam `verify:source`; bukan pengujian push nyata.
+
+## Grup siswa tersimpan
+
+Modul `src/modules/student-groups` menyediakan CRUD `/api/v1/student-groups` khusus sesi Guru, scoped workspace. Koleksi `studentGroups` menyimpan nama, 1–100 `studentIds` unik dan `version`; response menambahkan nama/kelas/status/avatar anggota terbaru tanpa notes internal. Edit/delete memakai conditional version dan menolak stale request dengan 409. Siswa asing/tidak aktif tidak dapat ditambahkan. Record grup dihapus oleh worker saat workspace dihapus.
+
+Flutter menempatkan kelola grup pada Lainnya dan pilihan cepat pada form jadwal. Payload jadwal tetap memakai snapshot `studentIds`, sehingga aturan konflik/transaksi jadwal existing tetap berlaku; mengganti/hapus grup tidak merombak jadwal lama. Bukan family/referral dan bukan `groupId` dari seri/occurrence. Tidak ada layanan, env, paket premium atau dependency baru. Deploy/restart API terbaru untuk mendaftarkan modul/schema; data lama tidak perlu diubah.
+
+`npm run test:student-groups` menjalankan pemeriksaan source terisolasi DTO/scope/membership/pagination/version/penghapusan, termasuk dalam `verify:source`. Tidak bootstrap Nest, menjalankan Mongo/Redis atau mengubah database development. [Kontrak lengkap](../docs/API.md#grup-siswa-tersimpan).
+
 API REST NALARA untuk akun Guru, portal Siswa/Orang Tua, siswa, jadwal, presensi, target belajar, laporan, notifikasi, keluarga, referral, dan langganan. Backend menggunakan NestJS + MongoDB replica set + Redis.
+
+## Karakter foto profil
+
+Profil Guru dan Siswa memakai katalog `assets/nalara_avatar_assets/manifest.json`. Guru memilih enam karakter `teacher`; Siswa memilih dua belas karakter `student`/`adult`. Endpoint Guru `GET /api/v1/me/avatars` dan `PATCH /api/v1/me/avatar`; Siswa memakai `GET /api/v1/portal/student/profile/avatars` dan `PATCH /api/v1/portal/student/profile/avatar`. PATCH menerima tepat `{avatarId:string|null}`. Server menetapkan pemilik dari sesi; Guru/Orang Tua tidak dapat mengganti avatar siswa melalui endpoint edit data siswa. `null` kembali ke inisial; pilihan disimpan pada user Guru atau record siswa, bukan perangkat/akun referral sementara. Avatar tetap dapat diganti Guru setelah langganan berakhir.
+
+`GET /api/v1/avatars/:id/image` hanya menyajikan WebP karakter katalog yang memang publik, tanpa data pengguna, traversal path atau akses ke uploads privat. Folder aset beserta manifest wajib ikut deployment; Dockerfile sudah menyalinnya ke image runtime. URL asli pada manifest adalah referensi aset, sedangkan `imagePath` katalog API memakai prefix API existing. Tidak ada upload/kamera/dependensi native baru. `npm run test:avatars` memeriksa katalog, scope/peran, validasi payload dan routing secara source-only dengan database tiruan.
 
 ## Logo privat dan PDF laporan
 
@@ -22,13 +108,13 @@ Respons **202/pending** berarti permintaan diterima, bukan seluruh data telah hi
 
 Default `ACCOUNT_DELETION_INTERVAL_SECONDS=60`, `ACCOUNT_DELETION_BATCH_SIZE=5` (lihat `.env.example`). Per koleksi maksimal 500 record per pass, order maksimal 20. Lease dan checkpoint difence dengan claim ID. Penanda teknis minimal (ID internal, status/waktu, fingerprint UID) diperiksa kembali harian untuk membersihkan late writes; UID asli dihapus dari job setelah cleanup Firebase. Operator perlu memantau `account.deletion.*`, permintaan tertunda dan status completion; jangan menghapus tombstone sebagai troubleshooting.
 
-`npm run test:account-deletion` termasuk `verify:source`: fake database/provider, tanpa server atau data nyata. Restart/deploy backend terbaru perlu dilakukan pengguna; proses berjalan tidak diubah otomatis. Scope saat ini akun Guru; self-service penghapusan portal independen, URL web penghapusan untuk distribusi Play dan kebijakan retensi/backup produksi masih gerbang rilis. [Kontrak](../docs/API.md), [verifikasi](../docs/VERIFICATION.md).
+`npm run test:account-deletion` termasuk `verify:source`: fake database/provider, tanpa server atau data nyata. Restart/deploy backend terbaru perlu dilakukan pengguna; proses berjalan tidak diubah otomatis. Self-service penghapusan portal tersedia pada `DELETE /portal/account` untuk Orang Tua dan `DELETE /portal/student/account` untuk Siswa; tindakan ini menghapus identitas portal, sesi, perangkat, dan inbox tanpa menghapus data pembelajaran milik Guru. URL web penghapusan dan kebijakan retensi/backup produksi tetap harus dipublish/diverifikasi sebelum rilis. [Kontrak](../docs/API.md), [verifikasi](../docs/VERIFICATION.md).
 
 ## Panduan persiapan mengajar
 
 `GET /api/v1/teaching-guide` mengembalikan milestone bidang belajar, siswa, jadwal, dan target dari record workspace milik principal Guru. Client tidak dapat menandai langkah selesai. Data existing/arsip/batal dikenali sebagai langkah persiapan yang pernah dilakukan. Langkah opsional Orang Tua membutuhkan akun parent aktif dengan siswa aktif pada family/workspace yang sama; respons hanya boolean, bukan data akun atau anak.
 
-`PATCH /api/v1/teaching-guide/preferences` menerima tepat `{dismissed: boolean}` dan memperbarui `users.teachingGuideDismissed` untuk akun/workspace principal. Field baru default false; akun lama tanpa field tetap kompatibel, tanpa migrasi isi database manual. Preferensi ini boleh disimpan setelah langganan berakhir, tetapi tidak mengaktifkan paket atau membolehkan mutasi data belajar. Kedua endpoint menggunakan AuthGuard Guru existing, tidak public/portal.
+`PATCH /api/v1/teaching-guide/preferences` menerima tepat `{tutorialSeen:true}` dan menyimpan `users.teachingTutorialSeen` secara monoton untuk akun/workspace principal. `GET` mengembalikan `tutorialSeen` bersama milestone; akun lama tanpa field memakai false. Preferensi ringkas/tampilkan Beranda telah dihapus. Field ini hanya mencatat penawaran tutorial otomatis, tidak menandai milestone selesai atau mengurangi badge sisa panduan. Penyimpanan tetap boleh setelah langganan berakhir tanpa mengaktifkan paket/mutasi belajar. Kedua endpoint menggunakan AuthGuard Guru existing, tidak public/portal. Terapkan backend dan Flutter versi kontrak ini bersamaan.
 
 `npm run test:teaching-guide` menjalankan pemeriksaan source terisolasi dengan fake database; sekarang termasuk dalam `verify:source`. Tidak bootstrap Nest, menjalankan server, menghasilkan dist atau menghubungi Mongo/Redis/provider. [Kontrak API](../docs/API.md) dan [hasil verifikasi](../docs/VERIFICATION.md).
 
@@ -266,13 +352,13 @@ Field `workspaceId` berarti data hanya boleh dibaca oleh Guru/portal yang mempun
 | `targets` | `workspaceId`, `planId`, `studentId`, `subjectId`, `title`, `description`, `successCriteria`, `priority=low\|normal\|high`, `status=active\|completed\|archived\|cancelled`, `progress=0..100`, `version` |
 | `histories` | `workspaceId`, `targetId`, `planId`, `studentId`, `before`, `after`, `note`, `actorId`, `sessionId?`, `visibility=teacher\|student\|shared` |
 | `reports` | `workspaceId`, `sessionId` unik per sesi, `studentId`, `topic`, `summary`, `targetIds[]`, `observations`, `difficulties`, `homework`, `recommendation`, `visibility`, `status=draft\|published`, `publishedAt?` |
-| `invitations` | `workspaceId`, `studentId?`, `familyId?`, `audience=student\|parent`, `tokenHash`, `expiresAt`, `revokedAt?`, `redeemedAt?` |
+| `invitations` | `workspaceId`, `studentId?`, `familyId?`, `audience=student\|parent`, `tokenHash`, `expiresAt=null`, `revokedAt?`, `lastUsedAt?`, `useCount`; `redeemedAt?` legacy |
 | `notifications` | `workspaceId`, `recipientAccountId?`, `title`, `body`, `route`, `readAt?`, `eventKey` unik per workspace, `deliveryStatus=pending\|delivering\|delivered\|suppressed\|failed`, attempts/backoff/claim/lease, hash hasil perangkat, adapter checkpoint, optional expiry |
 | `notificationDevices` | `workspaceId`, `accountId`, `accountType=teacher\|parent\|student`, `token` unik, `platform=android\|ios\|web`, `lastSeenAt` |
 | `rescheduleRequests` | `workspaceId`, `sessionId`, `familyId`, `parentAccountId`, `studentId`, waktu lama/permintaan/usulan, `reason`, `status=pending\|approved\|rejected\|cancelled\|expired`, reviewer dan waktu review |
 | `audits` | `workspaceId`, `actorId`, `action`, `resourceId` |
 | `subscriptions` | `workspaceId` unik, `plan=trial\|basic\|pro`, `trialStartedAt`, `trialEndsAt`, `paidThrough?`, `usageVersion` |
-| `subscriptionOrders` | `workspaceId`, `plan=basic\|pro`, `amount`, `currency`, `reference` unik, `status=creating\|pending\|paid\|failed`, `open`, checkout/provider/payment timestamps |
+| `subscriptionOrders` | `workspaceId`, `plan=basic\|pro`, `amount`, `currency`, `reference` unik, `status=creating\|pending\|paid\|failed\|cancelled`, `open`, checkout/provider/payment timestamps |
 | `billingEvents` | `eventHash` unik, `type?`, `reference?` |
 | `assignments` | `workspaceId`, `studentId`, `subjectId`, `kind=task\|material`, `title`, `content`, `dueAt?`, `status=draft\|published\|archived`, `visibility=student\|shared` |
 | `submissions` | `workspaceId`, `assignmentId`, `studentId`, `text`, `feedback`, `reviewedAt?`, `version` |
@@ -285,7 +371,9 @@ Redis bukan sumber data utama MongoDB. Redis menyimpan sementara hash OTP reset 
 
 Langganan tutor dan adapter SingaPay tersedia: Trial 14 hari/5 siswa, Basic Rp39.000/30 siswa, Pro Rp79.000/tanpa batas siswa. Feature gate dan kuota dijaga server. Modul `tutor-tools` menyediakan template/PDF, analytics, tugas/materi teks, branding, preferences dan CSV tanpa upload. SingaPay default nonaktif dan credential hanya di environment. [Setup/kontrak](../docs/SUBSCRIPTIONS.md); isolated `npm run test:subscriptions` tidak memulai server/database atau menulis build output.
 
-Sinkronisasi pembayaran memakai `POST /subscriptions/sync` untuk order terbuka workspace sendiri. History `reff_no` adalah nomor transaksi; order dicocokkan dengan `payment_link_reff_no`/nested payment-link reference, link ID, akun, nominal dan status paid. Callback membaca `payment.additional_info.payment_link`; aktivasi tetap memakai requery provider dan transaksi idempoten. Restart manual `npm run start:dev` diperlukan bila proses masih menjalankan dist sebelum perubahan. Tidak perlu membuat order atau pembayaran baru.
+Sinkronisasi pembayaran memakai `POST /subscriptions/sync` untuk order terbuka workspace sendiri, termasuk pemulihan link existing. History `reff_no` adalah nomor transaksi; order dicocokkan dengan `payment_link_reff_no`/nested payment-link reference, link ID, akun, nominal dan status paid. Callback membaca `payment.additional_info.payment_link`; aktivasi tetap memakai requery provider dan transaksi idempoten. Restart manual `npm run start:dev` diperlukan bila proses masih menjalankan dist sebelum perubahan.
+
+Perbaikan checkout/pembatalan: order tanpa ID tidak lagi buntu selamanya. Setelah creation lease/jeda dua menit, tombol Batal melakukan inquiry riwayat/link lengkap; jika reference benar-benar tidak ditemukan order ditutup sebagai `cancelled`, sedangkan link yang ditemukan dibatalkan di provider terlebih dahulu. Paid tidak bisa dibatalkan melalui jalur ini. Unknown outcome/timeout atau scan tidak lengkap tetap ditahan. Rejection create definitif menutup row `failed`; metadata error provider disimpan/log secara terbatas tanpa rahasia. Riwayat lama dipertahankan; setelah pembatalan sukses, user dapat checkout lagi dengan ID/reference/link baru. Tidak ada reset database/manual-paid, tagihan pengganti otomatis, atau migrasi wajib. Paket dan row paid tidak ditimpa oleh late create/cancel. Tes regresi source-only ada di `test/checkout-recovery.check.cjs` dan ikut `npm run test:subscriptions`/`verify:source`.
 
 Istilah di produk dan pesan API kini **Bidang belajar**, mencakup mata pelajaran akademik maupun keterampilan privat. Resource `/subjects`, DTO/field `subjectId` dan `subjectName`, serta penyimpanan data tetap memakai kontrak yang sama; perubahan istilah tidak membutuhkan migrasi database.
 
@@ -337,7 +425,9 @@ Source tests baru mencakup timezone/batas hari/DST, total lebih dari tiga, cance
 
 `families` menyimpan Orang Tua berdasarkan nomor HP canonical yang unik dalam workspace Guru. `students.familyId` menghubungkan beberapa anak ke satu keluarga. Family editor memakai optimistic `version`; perubahan melalui profil siswa juga menaikkan versi keluarga agar edit usang tidak menimpa hubungan baru. Pengelompokan dan audit atomik dalam transaksi MongoDB. Tidak ada penggabungan lintas workspace atau OTP verifikasi nomor Orang Tua.
 
-Guru membuat kode keluarga pada `/families/:id/invitations`, kode Siswa pada `/students/:id/invitations`. Kode tampil `NLR-XXXXX-XXXXX-XXXXX-XXXXX` (20 simbol acak/100-bit), disimpan hanya sebagai SHA-256, berlaku 7 hari, dan ditukar sekali. Pembuatan kode baru mencabut kode target yang belum dipakai. Redeem memvalidasi role/target/status/expiry, lalu membuat `portalAccounts`/`portalSessions` terpisah dari akun Guru. Access 15 menit, refresh inactivity 30 hari, rotation atomik; role dan anak dibaca server dari relasi aktif pada setiap `/portal/me`/refresh. Hanya nama/kelas anak yang dipaparkan pada tahap referral, tidak catatan Guru atau data pembelajaran.
+Guru membuat kode keluarga pada `/families/:id/invitations`, kode Siswa pada `/students/:id/invitations`. Kode tampil `NLR-XXXXX-XXXXX-XXXXX-XXXXX` (20 simbol acak/100-bit), disimpan hanya sebagai SHA-256, **tanpa batas waktu dan dapat dipakai kembali** sampai diganti/dicabut. Pembuatan kode baru mencabut semua kode target sebelumnya, termasuk yang pernah dipakai, serta memperbarui `currentInvitationId` pada siswa/keluarga dalam transaksi. GET invitations mengembalikan maksimal satu item terbaru tanpa token/hash; riwayat lama tetap disimpan. UI mengganti satu card alih-alih menambahkan riwayat ke bawah.
+
+Target legacy tanpa pointer memilih record paling baru (`createdAt`, lalu `_id`), termasuk jika record itu sudah dicabut; kode lebih lama tidak diaktifkan kembali. `expiresAt`/`redeemedAt` legacy tidak lagi membatasi kode terbaru yang belum dicabut. Tidak menjalankan migrasi atau mengubah database nyata saat development. Redeem berulang memperbarui `lastUsedAt`/`useCount`, memvalidasi role/target/status lalu membuat sesi akun portal yang sama dalam transaksi. Pilihan anak tetap berasal dari keanggotaan keluarga aktif; Siswa hanya dirinya. Code replacement/revoke-code tidak memutus sesi existing; revoke-all memutus seluruh akses target. Access tetap 15 menit dan refresh inactivity 30 hari dengan rotation atomik; jika sesi habis, gunakan kembali kode terbaru yang masih aktif. `npm run test:referrals` memeriksa kontrak ini dengan database tiruan tanpa bootstrap Nest atau build.
 
 Cabut kode belum dipakai tidak mencabut sesi yang sudah aktif. `/families/:id/access/revoke` atau `/students/:id/access/revoke` mencabut semua sesi dan kode target itu. Kode fresh dapat memberi akses kembali tanpa menghapus anak/keluarga. Token portal tidak diterima AuthGuard Guru dan token Guru tidak diterima PortalAuthGuard. Public verify tidak mengirim PII; redeem/verify rate limited 10/menit, refresh 30/menit. Kode legacy per-anak tanpa audience/family tidak dapat dipakai untuk akses Orang Tua; buat kode keluarga baru. Tidak ada migrasi data/database/index yang dieksekusi selama perubahan source.
 
@@ -347,7 +437,7 @@ Dashboard menerima optional studentId, mempertahankan seluruh children/childrenC
 
 `GET /portal/sessions/:id/overview` mengembalikan lesson terscope keluarga, schedule asli termasuk timezone/recurrence, serta published shared/parent reports persis sesi itu. Reschedule mendukung cancelled melalui parent DELETE, teacher availability/offer (pending dengan proposedStartAt/proposedEndAt), lalu parent PATCH action accept/decline; accept mengecek ulang benturan dan mengubah hanya satu occurrence secara atomik. Cancel/decline tidak mengubah kalender dan tetap dapat menutup request ketika entitlement habis; pemindahan tetap mengikuti subscription. Semua penulis interval kalender memakai lock workspace dalam transaksi sebelum membaca slot, termasuk create seri dan edit Guru. Inbox parent juga memvalidasi ulang resource terhadap keluarga saat ini, sehingga notifikasi anak yang telah pindah tidak ikut terbaca.
 
-Guard verify/redeem menggunakan pesan backend terpusat: kode salah meminta pengguna memeriksa kode dan meminta kode baru bila masih salah; kode expired/dicabut/diganti/sudah dipakai atau target unavailable memakai “Kode referral sudah tidak aktif. Silakan minta kode referral terbaru kepada Guru.” Kode aktif yang salah peran diberi arahan memilih peran yang sesuai. DTO memberi pesan kode salah yang sama untuk input kosong/malformed/non-string, tanpa duplikasi validator. Flutter hanya menampilkan `error.message`. Conditional claim, transaksi, rate limit, dan pemisahan izin Guru tetap berlaku; error database tidak disamarkan menjadi kode salah.
+Guard verify/redeem menggunakan pesan backend terpusat: kode salah meminta pengguna memeriksa kode; kode dicabut/diganti/legacy tanpa target atau target unavailable memakai “Kode referral sudah tidak aktif. Silakan minta kode referral terbaru kepada Guru.” Kode aktif yang salah peran diberi arahan memilih peran yang sesuai. DTO memberi pesan kode salah yang sama untuk input kosong/malformed/non-string, tanpa duplikasi validator. Flutter hanya menampilkan `error.message`. Transaksi, rate limit, dan pemisahan izin Guru tetap berlaku; error database tidak disamarkan menjadi kode salah. Masa pakai kode tidak disamakan dengan masa sesi access/refresh.
 
 ## Seed & tes
 
@@ -378,3 +468,13 @@ Seed tidak dijalankan di production dan tidak menimpa workspace yang berisi sisw
 - Jika OTP pertama setelah restart API gagal, pastikan Redis hidup. Kode sekarang menunggu koneksi Redis singkat saat startup/request; kegagalan dependency dikembalikan sebagai `503`, bukan `500`.
 
 Compose adalah konfigurasi development. Production membutuhkan MongoDB yang diautentikasi, TLS, backup, monitoring, provider delivery, dan konfigurasi secret yang sesuai lingkungan.
+
+## Jadwal kelompok dan presensi batch
+
+`POST /api/v1/schedules` menerima `studentIds` (1–100 UUID unik), atau `studentId` legacy. Server mengotorisasi semua siswa aktif dalam transaksi dengan calendar lock. Seri/occurrence tetap menyimpan row individual per anak, dengan `groupId` opsional yang dibuat server. Tidak perlu menghapus/mengubah index unik lama atau memigrasikan jadwal existing.
+
+List Guru tanpa filter siswa mengelompokkan **sebelum pagination/count**; detail memiliki `participants`. Home menghitung kelompok sekali. Portal tetap menggunakan student/family scope individual, tidak menerima daftar peserta keluarga lain. Reschedule Guru memindahkan seluruh peserta pada occurrence tersebut; approval orang tua hanya memindahkan occurrence anak terkait, sehingga terpisah dari kelompok jika waktunya berbeda. Sesi yang sudah memiliki presensi tersimpan tidak bisa dipindahkan bersama.
+
+`PATCH /api/v1/sessions/:id/attendance-batch` menerima `entries:[{sessionId,attendance}]`. Validasi membership/status semua entry, conditional writes dan event outbox dilakukan atomik. Delivery setelah commit; parent recipient berasal dari child session aktual. Status pending yang tidak dipilih tidak diubah; input terkunci/asing menolak seluruh batch. Legacy single attendance tetap tersedia. Menggunakan service Mongo/FCM existing, tidak menambah Docker/dependency atau mengubah entitlement.
+
+`npm run test:schedule-groups` masuk `npm run verify:source` (fake database/source-only, bukan bukti transaksi Mongo nyata). [Kontrak](../docs/GROUP_SCHEDULES.md), [hasil pemeriksaan](../docs/VERIFICATION.md).

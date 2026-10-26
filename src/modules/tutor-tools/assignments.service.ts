@@ -1,12 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import type { QueryFilter } from 'mongoose';
+import type { ClientSession, QueryFilter } from 'mongoose';
 import type { Principal } from '../../common/api';
 import { ListQuery } from '../../common/query.dto';
 import { ScopedService } from '../../common/scoped.service';
 import type { Assignment, PortalAccount } from '../../database/entities';
 import { NotificationEventsService } from '../notifications/notification-events.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
-import { AssignmentDto, FeedbackDto, SubmissionDto } from './tutor-tools.dto';
+import { AssignmentBatchDto, AssignmentDto, FeedbackDto, SubmissionDto } from './tutor-tools.dto';
 @Injectable()
 export class AssignmentsService {
   constructor(private readonly scope: ScopedService, private readonly subscriptions: SubscriptionsService, private readonly events: NotificationEventsService) {}
@@ -18,27 +18,52 @@ export class AssignmentsService {
   }
   async save(actor: Principal, dto: AssignmentDto, id?: string) {
     await this.subscriptions.requireFeature(actor.workspaceId, 'assignments');
-    await this.scope.activeStudent(dto.studentId, actor); await this.scope.get('subjects', dto.subjectId, actor);
-    const prior = id ? await this.scope.get('assignments', id, actor) : null;
-    if (prior && (prior.studentId !== dto.studentId || prior.subjectId !== dto.subjectId || prior.kind !== dto.kind)) throw new BadRequestException('Siswa, bidang belajar, dan jenis tidak dapat diubah. Buat tugas baru untuk tujuan lain.');
     const result = await this.scope.db.connection.transaction(async session => {
-      const fields = {...dto, dueAt: dto.kind === 'task' && dto.dueAt ? new Date(dto.dueAt) : undefined};
-      const row = id ? await this.scope.db.collection('assignments').findOneAndUpdate({_id: id, workspaceId: actor.workspaceId}, {$set: fields, ...(!fields.dueAt ? {$unset: {dueAt: ''}} : {})}, {session, returnDocument: 'after', runValidators: true}).lean()
-        : (await this.scope.db.collection('assignments').create([{...fields, workspaceId: actor.workspaceId}], {session}))[0].toObject();
-      if (!row) throw new NotFoundException('Tugas tidak ditemukan.');
-      let notificationIds: string[] = [];
-      if (dto.status === 'published' && prior?.status !== 'published') {
-        const recipients = await this.events.studentRecipients(actor.workspaceId, row.studentId, session);
-        notificationIds = await this.events.create([
-          ...recipients.studentIds.map(recipientAccountId => ({workspaceId: actor.workspaceId, recipientAccountId, title: dto.kind === 'task' ? 'Tugas belajar baru' : 'Materi belajar baru', body: `Guru membagikan ${dto.kind === 'task' ? 'tugas' : 'materi'}: ${row.title}.`, route: `/student/assignments/${row._id}`, eventKey: `assignment:${row._id}:student:${recipientAccountId}`})),
-          ...(dto.visibility === 'shared' ? recipients.parentIds.map(recipientAccountId => ({workspaceId: actor.workspaceId, recipientAccountId, title: 'Aktivitas belajar baru', body: `Guru membagikan aktivitas belajar untuk anak Anda: ${row.title}.`, route: `/parent/assignments/${row._id}`, eventKey: `assignment:${row._id}:parent:${recipientAccountId}`})) : []),
-        ], session);
-      }
-      await this.scope.audit(actor, id ? 'assignment.updated' : 'assignment.created', row._id, session);
-      return {id: row._id, notificationIds};
+      await this.scope.activeStudent(dto.studentId, actor, session);
+      await this.scope.get('subjects', dto.subjectId, actor, session);
+      const prior = id ? await this.scope.get('assignments', id, actor, session) : null;
+      if (prior && (prior.studentId !== dto.studentId || prior.subjectId !== dto.subjectId || prior.kind !== dto.kind)) throw new BadRequestException('Siswa, bidang belajar, dan jenis tidak dapat diubah. Buat tugas baru untuk tujuan lain.');
+      return this.write(actor, dto, session, id, prior);
     });
     await this.events.deliverAfterCommit(result.notificationIds);
-    return this.get(actor, result.id);
+    return this.get(actor, result.row._id);
+  }
+  async saveBatch(actor: Principal, dto: AssignmentBatchDto) {
+    await this.subscriptions.requireFeature(actor.workspaceId, 'assignments');
+    const {studentIds, ...content} = dto;
+    if (!Array.isArray(studentIds) || !studentIds.length || studentIds.length > 100 || new Set(studentIds).size !== studentIds.length) throw new BadRequestException('Pilih 1–100 siswa yang berbeda.');
+    const result = await this.scope.db.connection.transaction(async session => {
+      await this.scope.get('subjects', dto.subjectId, actor, session);
+      // Validate the complete snapshot before any writes; group membership is
+      // only a picker shortcut, never an authorization source or shared answer.
+      for (const studentId of studentIds) await this.scope.activeStudent(studentId, actor, session);
+      const rows: Assignment[] = [], notificationIds: string[] = [];
+      for (const studentId of studentIds) {
+        const item = await this.write(actor, {...content, studentId}, session);
+        rows.push(item.row); notificationIds.push(...item.notificationIds);
+      }
+      return {rows, notificationIds};
+    });
+    await this.events.deliverAfterCommit(result.notificationIds);
+    return {items: await this.scope.teachingNames(actor, result.rows), total: result.rows.length};
+  }
+  private async write(actor: Principal, dto: AssignmentDto, session: ClientSession, id?: string, prior?: Assignment | null) {
+    const {dueAt, ...content} = dto;
+    const deadline = dto.kind === 'task' && dueAt ? new Date(dueAt) : undefined;
+    const fields = {...content, ...(deadline ? {dueAt: deadline} : {})};
+    const row = id ? await this.scope.db.collection('assignments').findOneAndUpdate({_id: id, workspaceId: actor.workspaceId}, {$set: fields, ...(!deadline ? {$unset: {dueAt: ''}} : {})}, {session, returnDocument: 'after', runValidators: true}).lean()
+      : (await this.scope.db.collection('assignments').create([{...fields, workspaceId: actor.workspaceId}], {session}))[0].toObject();
+    if (!row) throw new NotFoundException('Tugas tidak ditemukan.');
+    let notificationIds: string[] = [];
+    if (dto.status === 'published' && prior?.status !== 'published') {
+      const recipients = await this.events.studentRecipients(actor.workspaceId, row.studentId, session);
+      notificationIds = await this.events.create([
+        ...recipients.studentIds.map(recipientAccountId => ({workspaceId: actor.workspaceId, recipientAccountId, title: dto.kind === 'task' ? 'Tugas belajar baru' : 'Materi belajar baru', body: `Guru membagikan ${dto.kind === 'task' ? 'tugas' : 'materi'}: ${row.title}.`, route: `/student/assignments/${row._id}`, eventKey: `assignment:${row._id}:student:${recipientAccountId}`})),
+        ...(dto.visibility === 'shared' ? recipients.parentIds.map(recipientAccountId => ({workspaceId: actor.workspaceId, recipientAccountId, title: 'Aktivitas belajar baru', body: `Guru membagikan aktivitas belajar untuk anak Anda: ${row.title}.`, route: `/parent/assignments/${row._id}`, eventKey: `assignment:${row._id}:parent:${recipientAccountId}`})) : []),
+      ], session);
+    }
+    await this.scope.audit(actor, id ? 'assignment.updated' : 'assignment.created', row._id, session);
+    return {row, notificationIds};
   }
   private async portalStudents(account: PortalAccount) {
     const filter = {workspaceId: account.workspaceId, status: 'active' as const, ...(account.role === 'student' ? {_id: account.studentId ?? 'invalid'} : {familyId: account.familyId ?? 'invalid'})};

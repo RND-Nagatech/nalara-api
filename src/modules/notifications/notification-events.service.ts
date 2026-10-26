@@ -10,6 +10,7 @@ export interface NotificationEventInput {
   body: string;
   route: string;
   eventKey: string;
+  tuitionFeeVersion?: number;
   deliveryExpiresAt?: Date;
 }
 
@@ -71,22 +72,20 @@ export class NotificationEventsService {
       .lean();
     if (!student) return { parentIds: [] as string[], studentIds: [] as string[] };
 
-    const [parents, students] = await Promise.all([
-      student.familyId
-        ? this.db.collection('portalAccounts').find({
+    const parents = student.familyId
+        ? await this.db.collection('portalAccounts').find({
             workspaceId,
             role: 'parent',
             familyId: student.familyId,
             status: 'active',
           }).select('_id').session(session ?? null).lean()
-        : [],
-      this.db.collection('portalAccounts').find({
+        : [];
+    const students = await this.db.collection('portalAccounts').find({
         workspaceId,
         role: 'student',
         studentId,
         status: 'active',
-      }).select('_id').session(session ?? null).lean(),
-    ]);
+      }).select('_id').session(session ?? null).lean();
     return {
       parentIds: parents.map((parent) => parent._id),
       studentIds: students.map((studentAccount) => studentAccount._id),

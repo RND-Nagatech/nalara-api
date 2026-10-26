@@ -34,7 +34,7 @@ function setup(extra = {}) {
 
 test('new tutor starts at zero, only the server derives milestones', async () => {
   const {service} = setup();
-  assert.deepEqual(await service.get(actor), {dismissed: false, hasSubject: false, hasStudent: false,
+  assert.deepEqual(await service.get(actor), {tutorialSeen: false, hasSubject: false, hasStudent: false,
     hasSchedule: false, hasTarget: false, parentConnected: false});
 });
 
@@ -78,13 +78,13 @@ test('another workspace never completes this tutor checklist', async () => {
   await assert.rejects(service.get({...actor, workspaceId: 'b'}), /Akun Guru tidak ditemukan/);
 });
 
-test('skip/resume preferences persist only on the authenticated scoped teacher', async () => {
+test('tutorial acknowledgement is idempotent and scoped to the authenticated teacher', async () => {
   const {service, data} = setup({users: [{...actor}, {_id: 'teacher-b', workspaceId: 'b'}]});
-  assert.deepEqual(await service.preferences(actor, true), {dismissed: true});
-  assert.equal((await service.get(actor)).dismissed, true);
-  assert.equal(data.users[1].teachingGuideDismissed, undefined);
-  await assert.rejects(service.preferences({...actor, workspaceId: 'b'}, false), /Akun Guru tidak ditemukan/);
-  assert.deepEqual(await service.preferences(actor, false), {dismissed: false});
+  assert.deepEqual(await service.preferences(actor), {tutorialSeen: true});
+  assert.equal((await service.get(actor)).tutorialSeen, true);
+  assert.equal(data.users[1].teachingTutorialSeen, undefined);
+  await assert.rejects(service.preferences({...actor, workspaceId: 'b'}), /Akun Guru tidak ditemukan/);
+  assert.deepEqual(await service.preferences(actor), {tutorialSeen: true});
   assert.equal((await service.get(actor)).hasSubject, false);
 });
 
@@ -113,14 +113,14 @@ test('database errors propagate rather than inventing an empty checklist', async
   await assert.rejects(service.get(actor), /database unavailable/);
 });
 
-test('preferences accept booleans only; progress, owner and workspace fields are rejected', async () => {
-  assert.equal((await validate(Object.assign(new TeachingGuidePreferencesDto(), {dismissed: false}))).length, 0);
-  for (const dismissed of [undefined, null, 'true', 1]) {
-    assert.ok((await validate(Object.assign(new TeachingGuidePreferencesDto(), {dismissed}))).length > 0);
+test('only tutorialSeen true is accepted; legacy preferences and completion injection are rejected', async () => {
+  assert.equal((await validate(Object.assign(new TeachingGuidePreferencesDto(), {tutorialSeen: true}))).length, 0);
+  for (const tutorialSeen of [undefined, null, false, 'true', 1]) {
+    assert.ok((await validate(Object.assign(new TeachingGuidePreferencesDto(), {tutorialSeen}))).length > 0);
   }
   const pipe = new ValidationPipe({whitelist: true, forbidNonWhitelisted: true, transform: true});
-  for (const injected of ['hasTarget', 'hasSubject', 'workspaceId', 'userId', 'completedCount']) {
-    await assert.rejects(pipe.transform({dismissed: true, [injected]: 'injected'}, {
+  for (const injected of ['dismissed', 'hasTarget', 'hasSubject', 'workspaceId', 'userId', 'completedCount']) {
+    await assert.rejects(pipe.transform({tutorialSeen: true, [injected]: 'injected'}, {
       type: 'body', metatype: TeachingGuidePreferencesDto,
     }));
   }

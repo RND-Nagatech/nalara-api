@@ -33,7 +33,7 @@ describe('One parent code for a family; portal isolation', () => {
     expect((await request('POST','/families',{parentName:'Orang Lain',parentPhone:'081234567899',studentIds:[children[0]._id]},outsider)).status).toBe(404);
     expect((await request('PATCH',`/students/${children[2]._id}`,{familyId:randomUUID()})).status).toBe(404);
   });
-  test('verification reveals no child data; one-time parent redemption resolves both children', async () => {
+  test('verification reveals no child data; reusable parent code resolves both children', async () => {
     const code=(await request('POST',`/families/${family._id}/invitations`,{})).data;
     const verified=await request('POST','/invitations/verify',{token:code.token,audience:'parent'},null);
     expect(verified.data).toEqual({valid:true});
@@ -44,7 +44,7 @@ describe('One parent code for a family; portal isolation', () => {
     expect(parentSession.profile.role).toBe('parent'); expect(parentSession.profile.students.map(s=>s.name)).toEqual(['Alya','Bima']);
     expect(parentSession.profile.students[0].notes).toBeUndefined(); expect(parentSession.profile.students[0].workspaceId).toBeUndefined();
     const reused=await request('POST','/invitations/redeem',{token:code.token,audience:'parent'},null);
-    expect(reused.status).toBe(401); expect(reused.error.message).toBe(referralMessages.inactiveCode);
+    expect(reused.status).toBe(200); expect(reused.data.profile.students.map(s=>s.name)).toEqual(['Alya','Bima']);
     for (const path of ['/me','/students','/families','/dashboard','/targets','/reports']) expect((await request('GET',path,null,parentSession)).status).toBe(401);
     expect((await request('GET','/portal/me',null,teacher)).status).toBe(401);
   });
@@ -72,22 +72,21 @@ describe('One parent code for a family; portal isolation', () => {
     await request('POST',`/families/${family._id}/access/revoke`,{});
     expect((await request('POST','/portal/refresh',{refreshToken:parentSession.refreshToken},null)).status).toBe(401);
   });
-  test('unused code replacement, concurrent one-time redemption, expiry, logout and revocation', async () => {
+  test('code replacement, concurrent reusable redemption, no expiry, logout and revocation', async () => {
     const service=app.get(InvitationsService);
     const first=await service.issueFamily(teacher.user,family._id);
     const second=await service.issueFamily(teacher.user,family._id);
     await expect(service.verify(first.token,'parent')).rejects.toThrow(referralMessages.inactiveCode);
     await expect(service.redeem({token:first.token,audience:'parent'})).rejects.toThrow(referralMessages.inactiveCode);
     const results=await Promise.allSettled([service.redeem({token:second.token,audience:'parent'}),service.redeem({token:second.token,audience:'parent'})]);
-    expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);
-    expect(results.find(r=>r.status==='rejected').reason.message).toBe(referralMessages.inactiveCode);
+    expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(2);
     const session=results.find(r=>r.status==='fulfilled').value;
     expect((await request('POST','/portal/logout',{refreshToken:session.refreshToken},null)).status).toBe(200);
     expect((await request('GET','/portal/me',null,session)).status).toBe(401);
     const expiring=await service.issueFamily(teacher.user,family._id);
     await db.collection('invitations').updateOne({_id:expiring._id},{$set:{expiresAt:new Date(Date.now()-1000)}});
-    await expect(service.verify(expiring.token,'parent')).rejects.toThrow(referralMessages.inactiveCode);
-    await expect(service.redeem({token:expiring.token,audience:'parent'})).rejects.toThrow(referralMessages.inactiveCode);
+    await expect(service.verify(expiring.token,'parent')).resolves.toEqual({valid:true});
+    await expect(service.redeem({token:expiring.token,audience:'parent'})).resolves.toHaveProperty('accessToken');
     const revoked=await service.issueFamily(teacher.user,family._id);
     await service.revokeFamily(teacher.user,family._id,revoked._id);
     await expect(service.verify(revoked.token,'parent')).rejects.toThrow(referralMessages.inactiveCode);
@@ -113,7 +112,7 @@ describe('One parent code for a family; portal isolation', () => {
     await db.collection('students').updateMany({workspaceId:teacher.user.workspaceId,familyId:family._id},{$set:{status:'archived'}});
     await expect(service.verify(pending.token,'parent')).rejects.toThrow(referralMessages.inactiveCode);
     await expect(service.redeem({token:pending.token,audience:'parent'})).rejects.toThrow(referralMessages.inactiveCode);
-    expect((await db.collection('invitations').findById(pending._id).lean()).redeemedAt).toBeUndefined();
+    expect((await db.collection('invitations').findById(pending._id).lean()).lastUsedAt).toBeUndefined();
     const unusable=await service.issueStudent(teacher.user,children[2]._id);
     await db.collection('students').updateOne({_id:children[2]._id},{$set:{status:'archived'}});
     await expect(service.verify(unusable.token,'student')).rejects.toThrow(referralMessages.inactiveCode);

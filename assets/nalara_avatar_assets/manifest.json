@@ -1,0 +1,128 @@
+[
+  {
+    "avatarId": "student_boy_01",
+    "label": "Siswa laki-laki 1",
+    "role": "student",
+    "path": "/avatars/student/student_boy_01.webp",
+    "file": "student/student_boy_01.webp"
+  },
+  {
+    "avatarId": "student_boy_02",
+    "label": "Siswa laki-laki 2",
+    "role": "student",
+    "path": "/avatars/student/student_boy_02.webp",
+    "file": "student/student_boy_02.webp"
+  },
+  {
+    "avatarId": "student_girl_01",
+    "label": "Siswa perempuan tanpa hijab 1",
+    "role": "student",
+    "path": "/avatars/student/student_girl_01.webp",
+    "file": "student/student_girl_01.webp"
+  },
+  {
+    "avatarId": "student_girl_02",
+    "label": "Siswa perempuan tanpa hijab 2",
+    "role": "student",
+    "path": "/avatars/student/student_girl_02.webp",
+    "file": "student/student_girl_02.webp"
+  },
+  {
+    "avatarId": "student_girl_hijab_01",
+    "label": "Siswa perempuan hijab 1",
+    "role": "student",
+    "path": "/avatars/student/student_girl_hijab_01.webp",
+    "file": "student/student_girl_hijab_01.webp"
+  },
+  {
+    "avatarId": "student_girl_hijab_02",
+    "label": "Siswa perempuan hijab 2",
+    "role": "student",
+    "path": "/avatars/student/student_girl_hijab_02.webp",
+    "file": "student/student_girl_hijab_02.webp"
+  },
+  {
+    "avatarId": "adult_man_01",
+    "label": "Orang tua laki-laki 1",
+    "role": "adult",
+    "path": "/avatars/adult/adult_man_01.webp",
+    "file": "adult/adult_man_01.webp"
+  },
+  {
+    "avatarId": "adult_man_02",
+    "label": "Orang tua laki-laki 2",
+    "role": "adult",
+    "path": "/avatars/adult/adult_man_02.webp",
+    "file": "adult/adult_man_02.webp"
+  },
+  {
+    "avatarId": "adult_woman_01",
+    "label": "Orang tua perempuan tanpa hijab 1",
+    "role": "adult",
+    "path": "/avatars/adult/adult_woman_01.webp",
+    "file": "adult/adult_woman_01.webp"
+  },
+  {
+    "avatarId": "adult_woman_02",
+    "label": "Orang tua perempuan tanpa hijab 2",
+    "role": "adult",
+    "path": "/avatars/adult/adult_woman_02.webp",
+    "file": "adult/adult_woman_02.webp"
+  },
+  {
+    "avatarId": "adult_woman_hijab_01",
+    "label": "Orang tua perempuan hijab 1",
+    "role": "adult",
+    "path": "/avatars/adult/adult_woman_hijab_01.webp",
+    "file": "adult/adult_woman_hijab_01.webp"
+  },
+  {
+    "avatarId": "adult_woman_hijab_02",
+    "label": "Orang tua perempuan hijab 2",
+    "role": "adult",
+    "path": "/avatars/adult/adult_woman_hijab_02.webp",
+    "file": "adult/adult_woman_hijab_02.webp"
+  },
+  {
+    "avatarId": "teacher_man_01",
+    "label": "Guru laki-laki 1",
+    "role": "teacher",
+    "path": "/avatars/teacher/teacher_man_01.webp",
+    "file": "teacher/teacher_man_01.webp"
+  },
+  {
+    "avatarId": "teacher_man_02",
+    "label": "Guru laki-laki 2",
+    "role": "teacher",
+    "path": "/avatars/teacher/teacher_man_02.webp",
+    "file": "teacher/teacher_man_02.webp"
+  },
+  {
+    "avatarId": "teacher_woman_01",
+    "label": "Guru perempuan tanpa hijab 1",
+    "role": "teacher",
+    "path": "/avatars/teacher/teacher_woman_01.webp",
+    "file": "teacher/teacher_woman_01.webp"
+  },
+  {
+    "avatarId": "teacher_woman_02",
+    "label": "Guru perempuan tanpa hijab 2",
+    "role": "teacher",
+    "path": "/avatars/teacher/teacher_woman_02.webp",
+    "file": "teacher/teacher_woman_02.webp"
+  },
+  {
+    "avatarId": "teacher_woman_hijab_01",
+    "label": "Guru perempuan hijab 1",
+    "role": "teacher",
+    "path": "/avatars/teacher/teacher_woman_hijab_01.webp",
+    "file": "teacher/teacher_woman_hijab_01.webp"
+  },
+  {
+    "avatarId": "teacher_woman_hijab_02",
+    "label": "Guru perempuan hijab 2",
+    "role": "teacher",
+    "path": "/avatars/teacher/teacher_woman_hijab_02.webp",
+    "file": "teacher/teacher_woman_hijab_02.webp"
+  }
+]

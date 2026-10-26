@@ -12,7 +12,7 @@ export const erasedWorkspaceCollections = [
   'notificationDevices', 'notifications', 'invitations', 'rescheduleRequests',
   'submissions', 'assignments', 'reportTemplates', 'tutorPreferences',
   'histories', 'reports', 'targets', 'plans', 'sessions', 'schedules',
-  'subjects', 'students', 'families', 'audits',
+  'subjects', 'studentGroups', 'tuitionFees', 'students', 'families', 'audits',
 ] as const;
 type ErasedCollection = typeof erasedWorkspaceCollections[number];
 // Adding a collection must explicitly choose how account erasure handles it.
@@ -20,7 +20,7 @@ export const collectionErasurePolicy: Record<keyof Collections, 'workspace-batch
   users: 'special', workspaces: 'special', authSessions: 'special', portalSessions: 'special',
   portalAccounts: 'special', subscriptions: 'special', subscriptionOrders: 'special', billingEvents: 'special',
   accountDeletions: 'tombstone',
-  families: 'workspace-batch', students: 'workspace-batch', subjects: 'workspace-batch',
+  families: 'workspace-batch', studentGroups: 'workspace-batch', tuitionFees: 'workspace-batch', students: 'workspace-batch', subjects: 'workspace-batch',
   schedules: 'workspace-batch', sessions: 'workspace-batch', plans: 'workspace-batch', targets: 'workspace-batch',
   histories: 'workspace-batch', reports: 'workspace-batch', invitations: 'workspace-batch',
   notifications: 'workspace-batch', notificationDevices: 'workspace-batch', rescheduleRequests: 'workspace-batch',

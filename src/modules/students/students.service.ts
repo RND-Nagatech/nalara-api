@@ -47,7 +47,7 @@ export class StudentsService {
     return this.get(actor,id);
   }
   invite(actor:Principal,id:string) { return this.codes.issueStudent(actor,id); }
-  async invitations(actor:Principal,id:string,query:ListQuery) { await this.get(actor,id); return this.scope.list('invitations',actor,query,{studentId:id,audience:'student'}); }
+  invitations(actor:Principal,id:string,query:ListQuery) { return this.codes.studentInvitations(actor,id,query); }
   async revoke(actor:Principal,id:string,invitationId:string) {
     await this.get(actor,id); const invite = await this.scope.get('invitations',invitationId,actor);
     if (invite.studentId !== id) return this.scope.get('invitations','invalid',actor);

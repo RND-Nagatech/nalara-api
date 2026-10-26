@@ -111,15 +111,15 @@ describe('Teacher end-to-end, using a real Mongo replica set',()=>{
     await request('POST',`/notifications/${event._id}/retry`); expect(send).toHaveBeenCalledTimes(2);
     send.mockRestore();
   });
-  test('invitations have hashed secrets, expiry and revocation',async()=>{
+  test('invitations have hashed secrets, unlimited validity and explicit revocation',async()=>{
     const invitation=(await request('POST',`/students/${student._id}/invitations`)).data; expect(invitation.token).toMatch(/^NLR-(?:[A-HJ-NP-Z2-9]{5}-){3}[A-HJ-NP-Z2-9]{5}$/);
     expect((await request('POST','/invitations/verify',{token:invitation.token},null)).status).toBe(200);
-    const stored=await db.collection('invitations').findById(invitation._id).select('+tokenHash').lean(); expect(stored.tokenHash).not.toBe(invitation.token); expect(stored.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    const stored=await db.collection('invitations').findById(invitation._id).select('+tokenHash').lean(); expect(stored.tokenHash).not.toBe(invitation.token); expect(stored.expiresAt).toBeNull();
     expect((await request('GET',`/students/${student._id}/invitations`)).data.items[0].tokenHash).toBeUndefined();
     await db.collection('invitations').updateOne({_id:invitation._id},{$set:{expiresAt:new Date(Date.now()-1000)}});
-    expect((await request('POST','/invitations/verify',{token:invitation.token},null)).status).toBe(401);
+    expect((await request('POST','/invitations/verify',{token:invitation.token},null)).status).toBe(200);
     await db.collection('invitations').updateOne({_id:invitation._id},{$set:{expiresAt:new Date(Date.now()+86400_000),redeemedAt:new Date()}});
-    expect((await request('POST','/invitations/verify',{token:invitation.token},null)).status).toBe(401);
+    expect((await request('POST','/invitations/verify',{token:invitation.token},null)).status).toBe(200);
     await db.collection('invitations').updateOne({_id:invitation._id},{$unset:{redeemedAt:1}});
     expect((await request('POST',`/students/${student._id}/invitations/${invitation._id}/revoke`)).status).toBe(201);
     expect((await db.collection('invitations').findById(invitation._id).lean()).revokedAt).toBeDefined();

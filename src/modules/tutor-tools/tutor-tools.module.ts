@@ -8,7 +8,7 @@ import { InvitationsModule } from '../invitations/invitations.module';
 import { PortalAuthGuard, PortalRequest } from '../invitations/portal.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RequireFeature } from '../subscriptions/subscriptions.guard';
-import { AssignmentDto, BrandingDto, FeedbackDto, PreferencesDto, SubmissionDto, TemplateDto } from './tutor-tools.dto';
+import { AssignmentBatchDto, AssignmentDto, BrandingDto, FeedbackDto, PreferencesDto, SubmissionDto, TemplateDto } from './tutor-tools.dto';
 import { TutorToolsService } from './tutor-tools.service';
 import { AssignmentsService } from './assignments.service';
 import { BrandingLogoService, LogoUpload } from './branding-logo.service';
@@ -18,6 +18,7 @@ export class TutorToolsController {
   constructor(private readonly tools: TutorToolsService, private readonly tasks: AssignmentsService, private readonly logos: BrandingLogoService) {}
   @Get('assignments') @RequireFeature('assignments') list(@Actor() a: Principal, @Query() q: ListQuery) { return this.tasks.list(a, q); }
   @Post('assignments') @RequireFeature('assignments') create(@Actor() a: Principal, @Body() d: AssignmentDto) { return this.tasks.save(a, d); }
+  @Post('assignments/batch') @RequireFeature('assignments') createBatch(@Actor() a: Principal, @Body() d: AssignmentBatchDto) { return this.tasks.saveBatch(a, d); }
   @Get('assignments/:id') @RequireFeature('assignments') get(@Actor() a: Principal, @Param('id', IdPipe) id: string) { return this.tasks.get(a, id); }
   @Patch('assignments/:id') @RequireFeature('assignments') update(@Actor() a: Principal, @Param('id', IdPipe) id: string, @Body() d: AssignmentDto) { return this.tasks.save(a, d, id); }
   @Patch('submissions/:id/feedback') @RequireFeature('assignments') feedback(@Actor() a: Principal, @Param('id', IdPipe) id: string, @Body() d: FeedbackDto) { return this.tasks.feedback(a, id, d); }

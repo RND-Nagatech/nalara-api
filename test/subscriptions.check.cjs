@@ -94,7 +94,7 @@ test('provider confirmation matches stored reference, exact amount, currency and
     history({payment_link:{id:123,reff_no:'wanted',account:{id:'other-account'}}}),
     {reff_no:'wanted',amount:79000,status:'paid'},
   ]) {
-    adapter.client = {paymentLinkHistories: {list: async () => ({items:[row]})}};
+    adapter.client = {paymentLinkHistories: {list: async () => ({items:[row],raw:{pagination:{currentPage:1,totalPages:1}}})}};
     assert.equal(await adapter.paid('wanted', 79000, '123'), null);
   }
   adapter.client.paymentLinkHistories.list = async (_account, filters) => {
@@ -149,6 +149,7 @@ test('subscription sync checks only the authenticated workspace pending order',a
   let reconciled;
   const db={collection:name=>{assert.equal(name,'subscriptionOrders');return {findOne:filter=>{assert.equal(filter.workspaceId,'tenant-a');assert.equal(filter.open,true);assert.deepEqual(filter.status,{$in:['creating','pending']});return {lean:async()=>({reference:'ref-a'})};}};}};
   const service=new billingModule.BillingService(db,{},{});service.reconcile=async reference=>{reconciled=reference;};
+  service.recoverLink=async reference=>{assert.equal(reference,'ref-a');};
   assert.equal(await service.synchronize({workspaceId:'tenant-a'}),undefined);assert.equal(reconciled,'ref-a');
 });
 test('subscription sync without an open order never calls the payment provider',async()=>{

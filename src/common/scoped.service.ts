@@ -38,12 +38,14 @@ export class ScopedService {
     const sessionSubjects=new Map(sessions.map(session=>[session._id,session.subjectId]));
     const subjectId=(row:T)=>row.subjectId ?? (row.sessionId ? sessionSubjects.get(row.sessionId) : undefined);
     const [students,subjects]=await Promise.all([
-      this.db.collection('students').find({workspaceId:actor.workspaceId,_id:{$in:rows.map(row=>row.studentId)}}).select('name').lean(),
+      this.db.collection('students').find({workspaceId:actor.workspaceId,_id:{$in:rows.map(row=>row.studentId)}}).select('name avatarId grade').lean(),
       this.db.collection('subjects').find({workspaceId:actor.workspaceId,_id:{$in:rows.map(subjectId).filter((id):id is string=>typeof id==='string')}}).select('name').lean(),
     ]);
     const studentNames=new Map(students.map(student=>[student._id,student.name]));
+    const studentAvatars=new Map(students.map(student=>[student._id,student.avatarId ?? null]));
+    const studentGrades=new Map(students.map(student=>[student._id,student.grade??'']));
     const subjectNames=new Map(subjects.map(subject=>[subject._id,subject.name]));
-    return rows.map(row=>({...row,studentName:studentNames.get(row.studentId)??'',subjectName:subjectNames.get(subjectId(row)??'')??''}));
+    return rows.map(row=>({...row,studentName:studentNames.get(row.studentId)??'',studentGrade:studentGrades.get(row.studentId)??'',studentAvatarId:studentAvatars.get(row.studentId)??null,subjectName:subjectNames.get(subjectId(row)??'')??''}));
   }
   async activeStudent(id: string, actor: Principal, session?: ClientSession) { const student = await this.get('students', id, actor, session); if (student.status !== 'active') throw new BadRequestException('Siswa sudah diarsipkan'); return student; }
   async audit(actor: Principal, action: string, resourceId: string, session?: ClientSession) { await this.db.collection('audits').create([{workspaceId:actor.workspaceId, actorId:actor._id, action, resourceId}], {session}); }

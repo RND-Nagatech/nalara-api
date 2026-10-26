@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { map } from 'rxjs';
 import type { User } from '../database/entities';
 import { Logger } from 'nestjs-pino';
-export type Principal = Pick<User, '_id' | 'name' | 'email' | 'phone' | 'workspaceId' | 'role' | 'timezone'>;
+export type Principal = Pick<User, '_id' | 'name' | 'email' | 'phone' | 'avatarId' | 'workspaceId' | 'role' | 'timezone'>;
 export type AuthRequest = Request & {user: Principal; sessionId: string; id?: string};
 export const Public = () => SetMetadata('public', true);
 export const Actor = createParamDecorator((_data: unknown, ctx: ExecutionContext): Principal => ctx.switchToHttp().getRequest<AuthRequest>().user);

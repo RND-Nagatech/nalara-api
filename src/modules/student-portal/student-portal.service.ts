@@ -26,18 +26,18 @@ export class StudentPortalService {
 
   private publicStudent(student: Student) {
     // Never serialize internal teacher notes, family IDs or referral metadata.
-    return { _id: student._id, name: student.name, grade: student.grade, status: student.status };
+    return { _id: student._id, name: student.name, grade: student.grade, status: student.status, avatarId: student.avatarId ?? null };
   }
 
   private async names<T extends NamedRow>(workspaceId: string, rows: readonly T[]) {
     const [subjects, teacher, students] = await Promise.all([
       this.db.collection('subjects').find({ workspaceId, _id: { $in: rows.map((row) => row.subjectId).filter((id): id is string => Boolean(id)) } }).select('_id name').lean(),
       this.db.collection('users').findOne({ workspaceId }).select('name').lean(),
-      this.db.collection('students').find({ workspaceId, _id: { $in: rows.map((row) => row.studentId) } }).select('_id name grade').lean(),
+      this.db.collection('students').find({ workspaceId, _id: { $in: rows.map((row) => row.studentId) } }).select('_id name grade avatarId').lean(),
     ]);
     const subjectMap = new Map(subjects.map((subject) => [subject._id, subject.name]));
     const studentMap = new Map(students.map((student) => [student._id, student]));
-    return rows.map((row) => ({ ...row, studentName: studentMap.get(row.studentId)?.name ?? '', studentGrade: studentMap.get(row.studentId)?.grade ?? '', subjectName: subjectMap.get(row.subjectId ?? '') ?? '', teacherName: teacher?.name ?? '' }));
+    return rows.map((row) => ({ ...row, studentName: studentMap.get(row.studentId)?.name ?? '', studentAvatarId: studentMap.get(row.studentId)?.avatarId ?? null, studentGrade: studentMap.get(row.studentId)?.grade ?? '', subjectName: subjectMap.get(row.subjectId ?? '') ?? '', teacherName: teacher?.name ?? '' }));
   }
 
   private async namedReports(workspaceId: string, reports: readonly LessonReport[]) {

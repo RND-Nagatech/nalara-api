@@ -4,10 +4,10 @@ const {referralMessages} = require('../dist/modules/invitations/referral-errors'
 
 describe('Referral error diagnosis stays on the backend', () => {
   const code='A'.repeat(20);
-  const invitation={_id:'invite',workspaceId:'workspace',audience:'parent',familyId:'family',expiresAt:new Date(Date.now()+86400_000)};
+  const invitation={_id:'invite',workspaceId:'workspace',audience:'parent',familyId:'family',expiresAt:null};
   function serviceWith(record) {
-    const query={session(){return this;},async lean(){return record;}};
-    const db={collection:jest.fn(()=>({findOne:jest.fn(()=>query)}))};
+    const query=value=>({session(){return this;},async lean(){return value;}});
+    const db={collection:jest.fn(name=>({findOne:jest.fn(()=>query(name==='invitations'?record:{_id:'family',currentInvitationId:record?._id}))}))};
     return new InvitationsService(db,{});
   }
   test('unknown code returns the wrong-code message without reading a target', async () => {

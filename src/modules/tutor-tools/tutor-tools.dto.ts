@@ -1,6 +1,6 @@
-import { IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString, IsUUID, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString, IsUUID, Matches, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
 const Trim = () => Transform(({value}) => typeof value === 'string' ? value.trim() : value);
 export class AssignmentDto {
   @ApiProperty() @IsUUID('4') studentId!: string;
@@ -11,6 +11,10 @@ export class AssignmentDto {
   @ApiPropertyOptional() @IsISO8601({strict: true}) @IsOptional() dueAt?: string;
   @ApiProperty({enum:['draft','published','archived']}) @IsIn(['draft', 'published', 'archived']) status!: 'draft' | 'published' | 'archived';
   @ApiProperty({enum:['student','shared']}) @IsIn(['student', 'shared']) visibility!: 'student' | 'shared';
+}
+export class AssignmentBatchDto extends OmitType(AssignmentDto, ['studentId'] as const) {
+  @ApiProperty({type: [String], minItems: 1, maxItems: 100})
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100) @ArrayUnique() @IsUUID('4', {each: true}) studentIds!: string[];
 }
 export class SubmissionDto {
   @ApiProperty() @Trim() @IsString() @MinLength(1) @MaxLength(10000) text!: string;
@@ -37,4 +41,6 @@ export class PreferencesDto {
   @ApiProperty() @IsBoolean() progress!: boolean;
   @ApiProperty() @IsBoolean() reports!: boolean;
   @ApiProperty() @IsBoolean() assignments!: boolean;
+  @ApiPropertyOptional({default: true}) @ValidateIf((_object, value) => value !== undefined) @IsBoolean() tuitionTeacherReminders?: boolean;
+  @ApiPropertyOptional({default: true}) @ValidateIf((_object, value) => value !== undefined) @IsBoolean() tuitionParentReminders?: boolean;
 }

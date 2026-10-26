@@ -27,9 +27,16 @@ import { SubscriptionGuard } from './modules/subscriptions/subscriptions.guard';
 import { TutorToolsModule } from './modules/tutor-tools/tutor-tools.module';
 import { TeachingGuideModule } from './modules/teaching-guide/teaching-guide.module';
 import { AccountDeletionModule } from './modules/account-deletion/account-deletion.module';
+import { AvatarsModule } from './modules/avatars/avatars.module';
+import { StudentGroupsModule } from './modules/student-groups/student-groups.module';
+import { TuitionFeesModule } from './modules/tuition-fees/tuition-fees.module';
+import { TeacherProfileModule } from './modules/teacher-profile/teacher-profile.module';
 
 @Global() @Module({providers:[ScopedService], exports:[ScopedService]}) class CommonModule {}
 @Module({imports:[
+  StudentGroupsModule,
+  TuitionFeesModule,
+  TeacherProfileModule,
   ConfigModule.forRoot({isGlobal:true, validate:validateEnvironment}),
   MongooseModule.forRootAsync({inject:[ConfigService], useFactory:(config:ConfigService) => ({uri:config.getOrThrow<string>('MONGODB_URI'), serverSelectionTimeoutMS:5000, socketTimeoutMS:10000, maxPoolSize:20, retryAttempts:2})}),
   LoggerModule.forRootAsync({
@@ -52,6 +59,6 @@ import { AccountDeletionModule } from './modules/account-deletion/account-deleti
     }),
   }),
   ThrottlerModule.forRoot([{name:'default', ttl:60_000, limit:120}]),
-  DatabaseModule, CommonModule, SubscriptionsModule, AuthModule, HealthModule, StudentsModule, SubjectsModule, SchedulesModule, LearningModule, ReportsModule, NotificationsModule, DashboardModule, InvitationsModule, FamiliesModule, ParentPortalModule, StudentPortalModule, TutorToolsModule, TeachingGuideModule, AccountDeletionModule,
+  DatabaseModule, CommonModule, SubscriptionsModule, AuthModule, HealthModule, StudentsModule, SubjectsModule, SchedulesModule, LearningModule, ReportsModule, NotificationsModule, DashboardModule, InvitationsModule, FamiliesModule, ParentPortalModule, StudentPortalModule, TutorToolsModule, TeachingGuideModule, AccountDeletionModule, AvatarsModule,
 ], providers:[{provide:APP_GUARD,useClass:ThrottlerGuard},{provide:APP_GUARD,useClass:AuthGuard},{provide:APP_GUARD,useClass:SubscriptionGuard}]})
 export class AppModule {}

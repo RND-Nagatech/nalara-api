@@ -17,12 +17,13 @@ export class TutorToolsService {
   constructor(private readonly scope: ScopedService, private readonly logos: BrandingLogoService) {}
   async preferences(actor: Principal) {
     const row = await this.scope.db.collection('tutorPreferences').findOne({workspaceId: actor.workspaceId}).lean();
-    if (!row) return {displayName: '', tagline: '', footer: '', accentColor: '#155D49', logoVersion: null, reminders: true, progress: true, reports: true, assignments: true};
+    if (!row) return {displayName: '', tagline: '', footer: '', accentColor: '#155D49', logoVersion: null, reminders: true, progress: true, reports: true, assignments: true, tuitionTeacherReminders: true, tuitionParentReminders: true};
     const {logoKey, ...preferences} = row;
-    return {...preferences, logoVersion: logoKey ?? null};
+    return {...preferences, tuitionTeacherReminders: row.tuitionTeacherReminders !== false, tuitionParentReminders: row.tuitionParentReminders !== false, logoVersion: logoKey ?? null};
   }
   async savePreferences(actor: Principal, dto: BrandingDto | PreferencesDto) {
-    await this.scope.db.collection('tutorPreferences').findOneAndUpdate({workspaceId: actor.workspaceId}, {$set: dto, $setOnInsert: {workspaceId: actor.workspaceId}}, {upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true}).lean();
+    const fields = Object.fromEntries(Object.entries(dto).filter(([, value]) => value !== undefined));
+    await this.scope.db.collection('tutorPreferences').findOneAndUpdate({workspaceId: actor.workspaceId}, {$set: fields, $setOnInsert: {workspaceId: actor.workspaceId}}, {upsert: true, returnDocument: 'after', runValidators: true, setDefaultsOnInsert: true}).lean();
     return this.preferences(actor);
   }
   templates(actor: Principal, q: ListQuery) { return this.scope.list('reportTemplates', actor, q); }

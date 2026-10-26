@@ -1,6 +1,18 @@
 import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Amount, SingaPay } from '@aliziodev/singapay';
+import { Amount, ApiError, AuthenticationError, ConfigurationError, InvalidAmountError, JsonNormalizationError, SingaPay } from '@aliziodev/singapay';
+
+export function paymentCreationFailure(error: unknown) {
+  const status = error instanceof ApiError ? error.status : undefined;
+  const code = error instanceof ApiError && error.code && /^[A-Z0-9_-]{1,32}$/i.test(String(error.code)) ? String(error.code).toUpperCase() : undefined;
+  // Explicit pre-creation rejections only. Duplicate/unknown-outcome responses
+  // must retain their reference for inquiry, just like transport timeouts.
+  const rejected = error instanceof AuthenticationError || error instanceof ConfigurationError
+    || error instanceof InvalidAmountError || error instanceof JsonNormalizationError
+    || (status !== undefined && [401, 403, 404, 405, 422].includes(status)
+      && !['SP001', 'SP004', 'SP005'].includes(code ?? ''));
+  return {rejected, status, code};
+}
 
 export const singapayCallback = '/api/v1/subscriptions/webhooks/singapay';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -46,16 +58,66 @@ export class SingaPayProvider {
     return {checkoutUrl, providerId: String(data.id ?? data.payment_link_id ?? '')};
   }
   async recover(reference: string, amount: number) {
-    const response = await this.requireClient().paymentLinks.list();
-    const row = (response.items ?? []).map(object).find(item => item.reff_no === reference && Number(item.total_amount ?? item.amount) === amount);
-    if (!row) return null;
-    const checkoutUrl = String(row.payment_url ?? row.checkout_url ?? '');
-    try { if (new URL(checkoutUrl).protocol !== 'https:') return null; } catch { return null; }
-    return {checkoutUrl, providerId: String(row.id ?? row.payment_link_id ?? '')};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.recoverHistory(reference, amount),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new ServiceUnavailableException('Daftar tautan pembayaran belum dapat dipastikan. Silakan periksa kembali.')), 8_000);
+        }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
+  private async recoverHistory(reference: string, amount: number) {
+    const client = this.requireClient(), deadline = Date.now() + 8_000;
+    let perPage = 25, expectedPages: number | undefined;
+    for (let page = 1; page <= 5; page++) {
+      if (Date.now() > deadline) throw new ServiceUnavailableException('Pemeriksaan tautan pembayaran belum selesai.');
+      // The installed endpoint wrapper has no pagination argument. Its public
+      // signed transport preserves credential/account scoping for later pages.
+      const response = page === 1 ? await client.paymentLinks.list() : await client.client.send({
+        method: 'GET', path: `/api/v1.0/payment-link-manage/${encodeURIComponent(this.accountId!)}`,
+        query: {page, per_page: perPage},
+      });
+      const rows = response.items ?? [];
+      const matches = rows.map(object).filter(row => row.reff_no === reference);
+      if (matches.length > 1) throw new ServiceUnavailableException('Identitas tautan pembayaran tidak konsisten.');
+      if (matches.length === 1) {
+        const row = matches[0], account = object(row.account);
+        let actualAmount: number | undefined;
+        try { actualAmount = Amount.from(row.total_amount as string | number ?? row.amount as string | number).value; } catch { /* Fail closed below. */ }
+        const providerId = String(row.id ?? row.payment_link_id ?? '');
+        if (actualAmount !== amount || (row.currency && row.currency !== 'IDR')
+          || (account.id && String(account.id) !== this.accountId) || !/^\d+$/.test(providerId)) {
+          throw new ServiceUnavailableException('Identitas tautan pembayaran belum dapat dikonfirmasi.');
+        }
+        const checkoutUrl = String(row.payment_url ?? row.checkout_url ?? '');
+        try { if (new URL(checkoutUrl).protocol === 'https:') return {providerId, checkoutUrl}; } catch { /* Retain ID for safe cancellation, never launch an invalid URL. */ }
+        return {providerId};
+      }
+      const pagination = object(object(response.raw).pagination);
+      const current = Number(pagination.currentPage ?? pagination.current_page);
+      const last = Number(pagination.totalPages ?? pagination.last_page);
+      if (current !== page || !Number.isSafeInteger(last) || last < 0 || (last > page && rows.length === 0)
+        || (expectedPages !== undefined && expectedPages !== last)) {
+        throw new ServiceUnavailableException('Daftar tautan pembayaran belum lengkap. Silakan periksa kembali.');
+      }
+      if (page >= last) return null;
+      expectedPages = last;
+      const size = Number(pagination.perPage ?? pagination.per_page ?? 25);
+      if (!Number.isSafeInteger(size) || size < 1 || size > 100) throw new ServiceUnavailableException('Ukuran halaman pembayaran tidak valid.');
+      perPage = size;
+    }
+    throw new ServiceUnavailableException('Daftar tautan pembayaran masih perlu diperiksa. Silakan coba kembali.');
   }
   async cancel(providerId: string) {
     if(!/^\d+$/.test(providerId)) throw new ServiceUnavailableException('Tautan pembayaran belum dapat dibatalkan. Periksa pembayaran kembali.');
-    await this.requireClient().paymentLinks.delete(Number(providerId));
+    try { await this.requireClient().paymentLinks.delete(Number(providerId)); }
+    catch (error) {
+      // An earlier cancellation may have reached the provider while its response
+      // was lost. Only an explicit 404 is idempotent, not 403/timeout/5xx.
+      if (!(error instanceof ApiError && error.status === 404)) throw error;
+    }
   }
   async paid(reference: string, amount: number, providerId?: string) {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -84,10 +146,12 @@ export class SingaPayProvider {
         && row.accountIds.every(id => !this.accountId || id === this.accountId));
       if (found) return found;
       const pagination = object(object(response.raw).pagination);
-      const currentPage = Number(pagination.currentPage ?? pagination.current_page ?? page);
-      if (currentPage !== page) throw new ServiceUnavailableException('Halaman riwayat pembayaran tidak dapat dikonfirmasi. Silakan periksa kembali.');
+      const currentPage = Number(pagination.currentPage ?? pagination.current_page);
       const totalPages = Number(pagination.totalPages ?? pagination.last_page);
-      if (rows.length === 0 || (Number.isFinite(totalPages) ? page >= totalPages : rows.length < 100)) return null;
+      if (currentPage !== page || !Number.isSafeInteger(totalPages) || totalPages < 0 || (totalPages > page && rows.length === 0)) {
+        throw new ServiceUnavailableException('Halaman riwayat pembayaran tidak dapat dikonfirmasi. Silakan periksa kembali.');
+      }
+      if (page >= totalPages) return null;
     }
     throw new ServiceUnavailableException('Riwayat pembayaran masih perlu diperiksa. Silakan coba kembali atau hubungi dukungan dengan nomor referensi.');
   }

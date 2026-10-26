@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, Module, Param, Patch, Post, Qu
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Actor, IdPipe, Principal, Public } from '../../common/api';
 import { ListQuery } from '../../common/query.dto';
-import { InvitationsModule } from '../invitations/invitations.module';
+import { InvitationsModule, InvitationsService } from '../invitations/invitations.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PortalAuthGuard, PortalRequest } from '../invitations/portal.guard';
 import { ParentAvailabilityDto, ParentDashboardQuery, ParentRescheduleDto, ParentStudentListQuery, RescheduleAvailabilityQuery, RespondRescheduleDto, ReviewRescheduleDto } from './parent-portal.dto';
@@ -17,7 +17,7 @@ import { RequireFeature } from '../subscriptions/subscriptions.guard';
 @ApiBearerAuth()
 @Controller('portal')
 export class ParentPortalController {
-  constructor(private readonly service: ParentPortalService, private readonly devices: NotificationDevicesService) {}
+  constructor(private readonly service: ParentPortalService, private readonly devices: NotificationDevicesService, private readonly invitations: InvitationsService) {}
   @UseGuards(PortalAuthGuard) @Get('dashboard') dashboard(@Req() req: PortalRequest, @Query() query: ParentDashboardQuery) { return this.service.dashboard(req.portalAccount, query); }
   @UseGuards(PortalAuthGuard) @Get('students') students(@Req() req: PortalRequest, @Query() query: ParentStudentListQuery) { return this.service.students(req.portalAccount, query); }
   @UseGuards(PortalAuthGuard) @Get('students/:id') student(@Req() req: PortalRequest, @Param('id', IdPipe) id: string) { return this.service.student(req.portalAccount, id); }
@@ -34,6 +34,7 @@ export class ParentPortalController {
   @UseGuards(PortalAuthGuard) @Post('notifications/read-all') @HttpCode(200) readAllNotifications(@Req() req: PortalRequest) { return this.service.readAllNotifications(req.portalAccount); }
   @UseGuards(PortalAuthGuard) @Post('notifications/devices') @HttpCode(200) registerDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) { return this.devices.registerPortal(req.portalAccount, dto, req.portalSessionId); }
   @UseGuards(PortalAuthGuard) @Delete('notifications/devices') @HttpCode(200) unregisterDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) { return this.devices.unregisterPortal(req.portalAccount, dto); }
+  @UseGuards(PortalAuthGuard) @Delete('account') @HttpCode(200) deleteAccount(@Req() req: PortalRequest) { return this.invitations.deletePortalAccount(req.portalAccount); }
   @UseGuards(PortalAuthGuard) @Get('availability') availability(@Req() req: PortalRequest, @Query() dto: ParentAvailabilityDto) { return this.service.availability(req.portalAccount, dto); }
   @UseGuards(PortalAuthGuard) @Post('reschedule-requests') @HttpCode(201) request(@Req() req: PortalRequest, @Body() dto: ParentRescheduleDto) { return this.service.requestReschedule(req.portalAccount, dto); }
   @UseGuards(PortalAuthGuard) @Get('reschedule-requests') requests(@Req() req: PortalRequest, @Query() query: ListQuery) { return this.service.parentRequests(req.portalAccount, query); }

@@ -12,9 +12,10 @@ import { NotificationScheduler } from './notification-scheduler.service';
 import { NotificationAudienceService } from './notification-audience.service';
 import { NotificationDeliveryWorker } from './notification-delivery-worker.service';
 import { AuthModule } from '../auth/auth.module';
+import { teacherNotificationScope } from './teacher-notification-scope';
 @Injectable() export class NotificationsService {
   constructor(private readonly scope:ScopedService,private readonly delivery:NotificationDelivery) {}
-  list(a:Principal,q:ListQuery) { return this.scope.list('notifications',a,q,{$or:[{recipientAccountId:{$exists:false}},{recipientAccountId:a._id}]}); }
+  async list(a:Principal,q:ListQuery) { return this.scope.list('notifications',a,q,await teacherNotificationScope(this.scope.db,a)); }
   async read(a:Principal,id:string) { await this.scope.get('notifications',id,a); return this.scope.db.collection('notifications').findOneAndUpdate({_id:id,workspaceId:a.workspaceId,$or:[{recipientAccountId:{$exists:false}},{recipientAccountId:a._id}]},{$set:{readAt:new Date()}},{returnDocument: 'after'}).lean(); }
   async readAll(a:Principal) { const result=await this.scope.db.collection('notifications').updateMany({workspaceId:a.workspaceId,$or:[{recipientAccountId:{$exists:false}},{recipientAccountId:a._id}],readAt:{$exists:false}},{$set:{readAt:new Date()}}); return {updated:result.modifiedCount}; }
   async retry(a:Principal,id:string) {

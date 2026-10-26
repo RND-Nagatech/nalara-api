@@ -38,16 +38,15 @@ describe('Referral and family contracts', () => {
   test('wrong, inactive, and mismatched role messages are distinct and contain no target data', () => {
     const now=new Date('2026-10-14T00:00:00Z');
     const valid={audience:'parent',familyId:randomUUID(),expiresAt:new Date(now.getTime()+1000)};
-    expect(() => assertUsableInvitation(null,'parent',now)).toThrow(referralMessages.wrongCode);
-    expect(() => assertUsableInvitation(valid,'student',now)).toThrow(referralMessages.wrongRole);
+    expect(() => assertUsableInvitation(null,'parent')).toThrow(referralMessages.wrongCode);
+    expect(() => assertUsableInvitation(valid,'student')).toThrow(referralMessages.wrongRole);
     for (const record of [
-      {...valid,expiresAt:now}, {...valid,expiresAt:new Date(now.getTime()-1000)},
-      {...valid,expiresAt:undefined}, {...valid,expiresAt:new Date('invalid')},
-      {...valid,revokedAt:null}, {...valid,redeemedAt:null},
-      {...valid,revokedAt:now}, {...valid,redeemedAt:now}, {...valid,familyId:undefined},
+      {...valid,revokedAt:null}, {...valid,revokedAt:now}, {...valid,familyId:undefined},
       {...valid,audience:undefined}, {audience:'student',expiresAt:valid.expiresAt},
-    ]) expect(() => assertUsableInvitation(record,'parent',now)).toThrow(referralMessages.inactiveCode);
-    expect(() => assertUsableInvitation(valid,'parent',now)).not.toThrow();
+    ]) expect(() => assertUsableInvitation(record,'parent')).toThrow(referralMessages.inactiveCode);
+    for (const record of [valid, {...valid,expiresAt:null}, {...valid,expiresAt:now,redeemedAt:now}, {...valid,expiresAt:undefined}]) {
+      expect(() => assertUsableInvitation(record,'parent')).not.toThrow();
+    }
   });
   test('redeem requires audience and forbids actor/workspace/teacher escalation', async () => {
     const token = createReferralCode().display;

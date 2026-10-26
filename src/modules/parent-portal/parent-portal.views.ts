@@ -6,6 +6,7 @@ export function parentStudent(student: Student) {
     _id: student._id,
     name: student.name,
     grade: student.grade,
+    avatarId: student.avatarId ?? null,
     status: student.status,
     familyId: student.familyId,
     createdAt: student.createdAt,

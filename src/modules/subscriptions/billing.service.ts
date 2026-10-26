@@ -1,10 +1,13 @@
-import { ConflictException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, HttpException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Principal } from '../../common/api';
 import { Database } from '../../database/database.module';
+import type { SubscriptionOrder } from '../../database/entities';
 import { nextBillingDate, PaidPlan, planCatalog } from './catalog';
 import { SubscriptionsService } from './subscriptions.service';
-import { paymentFacts, SingaPayProvider } from './singapay.provider';
+import { paymentCreationFailure, paymentFacts, SingaPayProvider } from './singapay.provider';
+
+const creationGraceMs = 2 * 60_000;
 @Injectable()
 export class BillingService {
   private readonly logger = new Logger(BillingService.name);
@@ -18,18 +21,36 @@ export class BillingService {
     if (plan.studentLimit !== null && activeStudents > plan.studentLimit) throw new ConflictException(`Paket ini menampung ${plan.studentLimit} siswa aktif. Arsipkan siswa yang tidak aktif terlebih dahulu atau pilih Tutor Pro.`);
     let existing = await this.db.collection('subscriptionOrders').findOne({workspaceId: actor.workspaceId, open: true}).lean();
     if (existing) {
-      if (existing.plan !== planId) throw new ConflictException('Masih ada pembayaran paket lain yang belum selesai. Selesaikan pembayaran tersebut terlebih dahulu.');
-      if (!existing.checkoutUrl) throw new ConflictException('Pembayaran sedang dikonfirmasi. Periksa status pembayaran; jangan membuat pembayaran ganda.');
+      if (existing.plan !== planId) throw new ConflictException('Masih ada order paket lain yang terbuka. Buka Riwayat pembayaran, lalu lanjutkan atau batalkan order tersebut sebelum memilih paket baru.');
+      if (!existing.checkoutUrl) throw new ConflictException('Tautan pembayaran order sebelumnya belum tersedia. Buka Riwayat pembayaran untuk memeriksa atau membatalkan order; belum ada pembayaran yang dinyatakan berhasil.');
       return existing;
     }
     const reference = `NLR-${randomUUID().replace(/-/g, '')}`;
-    try { existing = (await this.db.collection('subscriptionOrders').create({workspaceId: actor.workspaceId, reference, plan: planId, amount: plan.price, currency: 'IDR'})).toObject(); }
+    const creationLeaseUntil = new Date(Date.now() + creationGraceMs);
+    try { existing = (await this.db.collection('subscriptionOrders').create({workspaceId: actor.workspaceId, reference, plan: planId, amount: plan.price, currency: 'IDR', creationLeaseUntil})).toObject(); }
     catch (error) { if ((error as {code?: number}).code === 11000) throw new ConflictException('Pembayaran lain sedang dibuat. Muat ulang halaman langganan.'); throw error; }
     try {
       const link = await this.provider.create(reference, plan.price);
-      await this.db.collection('subscriptionOrders').updateOne({_id: existing._id, status: 'creating'}, {$set: {status: 'pending'}});
-      return await this.db.collection('subscriptionOrders').findOneAndUpdate({_id: existing._id, workspaceId: actor.workspaceId}, {$set: link}, {returnDocument: 'after'}).lean();
-    } catch {
+      const saved = await this.db.collection('subscriptionOrders').findOneAndUpdate(
+        {_id: existing._id, workspaceId: actor.workspaceId, open: true, status: 'creating'},
+        {$set: {...link, status: 'pending', creationFinishedAt: new Date()}, $unset: {creationLeaseUntil: 1}},
+        {returnDocument: 'after'},
+      ).lean();
+      // A verified webhook/recovery may have won while create was in flight.
+      return saved ?? await this.order(actor.workspaceId, existing._id);
+    } catch (error) {
+      const failure = paymentCreationFailure(error);
+      this.logger.warn({event: 'subscription.checkout.create_failed', orderId: existing._id,
+        errorType: error instanceof Error ? error.name : 'Unknown', providerStatus: failure.status, providerCode: failure.code,
+        definitiveRejection: failure.rejected});
+      await this.db.collection('subscriptionOrders').updateOne(
+        {_id: existing._id, workspaceId: actor.workspaceId, open: true, status: 'creating'},
+        {$set: {creationFinishedAt: new Date(), ...(failure.status ? {creationErrorStatus: failure.status} : {}),
+          ...(failure.code ? {creationErrorCode: failure.code} : {}), ...(failure.rejected ? {status: 'failed', open: false} : {})},
+          ...(failure.rejected ? {$unset: {creationLeaseUntil: 1}} : {})},
+      );
+      if (failure.rejected) throw new ServiceUnavailableException({code: 'PAYMENT_CREATION_REJECTED',
+        message: 'Penyedia menolak pembuatan tautan pembayaran. Order ini sudah ditutup dan belum dinyatakan terbayar. Silakan coba kembali; bila berulang, hubungi dukungan dengan nomor referensi.'});
       // A timeout may mean the provider DID create the link. Preserve the
       // reference for reconciliation instead of issuing another charge.
       throw new ServiceUnavailableException('Status pembuatan pembayaran belum dapat dipastikan. Gunakan Periksa pembayaran; langganan hanya aktif setelah pembayaran terverifikasi.');
@@ -45,6 +66,7 @@ export class BillingService {
     if (!order) return;
     try {
       await this.reconcile(order.reference);
+      await this.recoverLink(order.reference);
     } catch (error) {
       // Preserve the current entitlement if the provider is unavailable; never
       // turn a failed lookup into a successful payment or expose provider secrets.
@@ -53,37 +75,89 @@ export class BillingService {
     }
   }
   async refresh(actor: Pick<Principal, 'workspaceId'>, id: string) {
-    const order = await this.db.collection('subscriptionOrders').findOne({_id: id, workspaceId: actor.workspaceId}).lean();
-    if (!order) throw new NotFoundException('Pembayaran tidak ditemukan.');
-    if (order.status !== 'paid') {
+    const order = await this.order(actor.workspaceId, id);
+    if (order.open && order.status !== 'paid') {
       await this.reconcile(order.reference);
       const latest = await this.db.collection('subscriptionOrders').findOne({_id: id, workspaceId: actor.workspaceId}).lean();
-      if (latest && latest.status !== 'paid' && !latest.checkoutUrl && latest.open) {
+      if (latest && latest.status !== 'paid' && (!latest.checkoutUrl || !latest.providerId) && latest.open) {
         await this.recoverLink(order.reference);
       }
     }
-    return (await this.db.collection('subscriptionOrders').findOne({_id: id, workspaceId: actor.workspaceId}).lean())!;
+    return this.order(actor.workspaceId, id);
   }
   async recoverLink(reference: string) {
     const order = await this.db.collection('subscriptionOrders').findOne({reference,open:true,status:{$in:['creating','pending']}}).lean();
-    if (!order || (order.checkoutUrl && order.providerId)) return;
+    if (!order) return;
+    if (order.checkoutUrl && order.providerId) return true;
     // Recovery is read-only at the provider. Never create another link/charge
     // merely because the response to the original request was lost.
-    const recovered = await this.provider.recover(order.reference,order.amount);
+    const recovered = await this.providerOperation(order, 'recover', () => this.provider.recover(order.reference,order.amount));
     if (recovered) await this.db.collection('subscriptionOrders').updateOne({_id:order._id,workspaceId:order.workspaceId,open:true,status:{$in:['creating','pending']}},{$set:{...recovered,status:'pending'}});
+    return recovered !== null;
   }
   async cancel(actor: Pick<Principal, 'workspaceId'>, id: string) {
-    const order = await this.refresh(actor,id);
+    let order = await this.order(actor.workspaceId, id);
     if(order.status === 'paid') throw new ConflictException('Pembayaran sudah berhasil dan tidak dapat dibatalkan.');
     if(!order.open) return order;
-    if(!order.providerId) throw new ConflictException('Status pembayaran belum pasti. Periksa kembali atau hubungi dukungan dengan nomor referensi.');
-    await this.provider.cancel(order.providerId);
-    return this.db.collection('subscriptionOrders').findOneAndUpdate({_id:id,workspaceId:actor.workspaceId,status:{$ne:'paid'}},{$set:{open:false,status:'failed'}},{returnDocument:'after'}).lean();
+    if (this.creationInFlight(order)) throw new ConflictException('Tautan pembayaran masih dalam proses pembuatan. Tunggu hingga dua menit sejak order dibuat, lalu coba Batalkan kembali.');
+    // Both provider reads must succeed. A timeout, incomplete page or mismatched
+    // identity is not evidence that a link/payment never existed.
+    await this.reconcile(order.reference);
+    order = await this.order(actor.workspaceId, id);
+    if (order.status === 'paid') throw new ConflictException('Pembayaran sudah berhasil dan tidak dapat dibatalkan.');
+    if (!order.open) return order;
+    if (!order.providerId) {
+      const found = await this.recoverLink(order.reference);
+      order = await this.order(actor.workspaceId, id);
+      if (order.status === 'paid') throw new ConflictException('Pembayaran sudah berhasil dan tidak dapat dibatalkan.');
+      if (!order.open) return order;
+      if (!order.providerId && found !== false) throw new ConflictException('Identitas pembayaran belum dapat dipastikan. Silakan periksa kembali sebelum membatalkan.');
+    }
+    if (this.creationInFlight(order)) throw new ConflictException('Pembuatan tautan pembayaran belum selesai. Silakan coba kembali.');
+    if (order.providerId) {
+      const providerId = order.providerId;
+      await this.providerOperation(order, 'cancel', () => this.provider.cancel(providerId));
+      // Recheck settlement after deletion acknowledgement, including a retry
+      // whose original delete response was lost. Provider errors leave it open.
+      await this.reconcile(order.reference);
+    }
+    const closed = await this.db.collection('subscriptionOrders').findOneAndUpdate(
+      {_id:id,workspaceId:actor.workspaceId,open:true,status:{$in:['creating','pending']},
+        ...(order.providerId ? {providerId:order.providerId} : {$or:[{providerId:{$exists:false}},{providerId:''},{providerId:null}]} )},
+      {$set:{open:false,status:'cancelled',cancelledAt:new Date()},$unset:{creationLeaseUntil:1}},
+      {returnDocument:'after'},
+    ).lean();
+    const latest = closed ?? await this.order(actor.workspaceId, id);
+    if (latest.status === 'paid') throw new ConflictException('Pembayaran sudah berhasil dan tidak dapat dibatalkan.');
+    if (latest.open) throw new ConflictException('Status order berubah saat pembatalan. Periksa pembayaran kembali.');
+    return latest;
+  }
+  private async order(workspaceId: string, id: string): Promise<SubscriptionOrder> {
+    const order = await this.db.collection('subscriptionOrders').findOne({_id:id,workspaceId}).lean();
+    if (!order) throw new NotFoundException('Pembayaran tidak ditemukan.');
+    return order;
+  }
+  private creationInFlight(order: SubscriptionOrder) {
+    if (order.status !== 'creating') return false;
+    const deadline = order.creationLeaseUntil?.getTime() ?? new Date(order.createdAt).getTime() + creationGraceMs;
+    return !Number.isFinite(deadline) || deadline > Date.now();
+  }
+  private async providerOperation<T>(order: SubscriptionOrder, operation: string, action: () => Promise<T>): Promise<T> {
+    try { return await action(); }
+    catch (error) {
+      if (error instanceof HttpException) throw error;
+      const failure = paymentCreationFailure(error);
+      this.logger.warn({event: 'subscription.provider.operation_failed', orderId: order._id, operation,
+        errorType: error instanceof Error ? error.name : 'Unknown', providerStatus: failure.status, providerCode: failure.code});
+      throw new ServiceUnavailableException(operation === 'cancel'
+        ? 'Pembatalan belum dikonfirmasi penyedia. Periksa pembayaran kembali sebelum membuat order baru.'
+        : 'Status pembayaran belum dapat dipastikan dari penyedia. Silakan periksa kembali sebelum membuat order baru.');
+    }
   }
   async reconcile(reference: string) {
     const order = await this.db.collection('subscriptionOrders').findOne({reference}).lean();
     if (!order || order.status === 'paid') return;
-    if (!await this.provider.paid(order.reference, order.amount, order.providerId)) return;
+    if (!await this.providerOperation(order, 'paid', () => this.provider.paid(order.reference, order.amount, order.providerId))) return;
     await this.db.connection.transaction(async session => {
       const current = await this.db.collection('subscriptions').findOneAndUpdate({workspaceId: order.workspaceId, deletionRequestedAt: {$exists: false}}, {$inc: {usageVersion: 1}}, {session, returnDocument: 'after'}).lean();
       if (!current) {

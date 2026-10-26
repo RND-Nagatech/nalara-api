@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ForbiddenException } from '@nestjs/common';
 import { IdPipe, Public } from '../../common/api';
 import { ListQuery } from '../../common/query.dto';
-import { InvitationsModule } from '../invitations/invitations.module';
+import { InvitationsModule, InvitationsService } from '../invitations/invitations.module';
 import { PortalAuthGuard, PortalRequest } from '../invitations/portal.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { NotificationDevicesService } from '../notifications/notification-devices.service';
@@ -15,7 +15,7 @@ import { StudentPortalService } from './student-portal.service';
 @ApiBearerAuth()
 @Controller('portal/student')
 export class StudentPortalController {
-  constructor(private readonly service: StudentPortalService, private readonly devices: NotificationDevicesService) {}
+  constructor(private readonly service: StudentPortalService, private readonly devices: NotificationDevicesService, private readonly invitations: InvitationsService) {}
 
   @UseGuards(PortalAuthGuard) @Get('dashboard') dashboard(@Req() req: PortalRequest) { return this.service.dashboard(req.portalAccount); }
   @UseGuards(PortalAuthGuard) @Get('profile') profile(@Req() req: PortalRequest) { return this.service.profile(req.portalAccount); }
@@ -37,6 +37,10 @@ export class StudentPortalController {
   @UseGuards(PortalAuthGuard) @Delete('notifications/devices') @HttpCode(200) unregisterDevice(@Req() req: PortalRequest, @Body() dto: NotificationDeviceDto) {
     if (req.portalAccount.role !== 'student') throw new ForbiddenException('Endpoint ini khusus akun siswa');
     return this.devices.unregisterPortal(req.portalAccount, dto);
+  }
+  @UseGuards(PortalAuthGuard) @Delete('account') @HttpCode(200) deleteAccount(@Req() req: PortalRequest) {
+    if (req.portalAccount.role !== 'student') throw new ForbiddenException('Endpoint ini khusus akun siswa');
+    return this.invitations.deletePortalAccount(req.portalAccount);
   }
 }
 

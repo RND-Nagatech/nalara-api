@@ -40,6 +40,7 @@ export class NotificationScheduler implements OnModuleInit, OnModuleDestroy {
         try {
           await this.remindSubscription(workspaceId, timezone, now);
           if(!await this.subscriptions.canUse(workspaceId,'automaticReminders')) continue;
+          await this.remindTuition(workspaceId, timezone, now);
           await this.remindTargets(workspaceId, timezone, now);
           await this.remindSessions(workspaceId, timezone, now);
         } catch (error) {
@@ -148,8 +149,20 @@ export class NotificationScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   private async remindSessions(workspaceId: string, timezone: string, now: Date) {
-    const window = this.tomorrowWindow(now, timezone);
-    const sessions = await this.db.collection('sessions').find({ workspaceId, startAt: { $gte: window.start, $lt: window.end }, status: 'scheduled' }).select('_id studentId subjectId startAt').lean();
+    // Bound candidate reads, then use each series' original local calendar.
+    // Updating the teacher's display/default zone must not move H-1 reminders
+    // for an existing series. 72h also covers legacy IANA/DST tomorrow windows.
+    const candidates = await this.db.collection('sessions').find({ workspaceId, startAt: { $gte: now, $lt: new Date(now.getTime() + 72 * 3600_000) }, status: 'scheduled' }).select('_id scheduleId groupId studentId subjectId startAt endAt').sort({_id:1}).lean();
+    const schedules = await this.db.collection('schedules').find({workspaceId, _id: {$in: [...new Set(candidates.map(row => row.scheduleId).filter(Boolean))]}}).select('_id timezone').lean();
+    const zones = new Map(schedules.map(row => [row._id, row.timezone]));
+    const windows = new Map<string, ReturnType<NotificationScheduler['tomorrowWindow']>>();
+    const sessions = candidates.filter(row => {
+      const zone = zones.get(row.scheduleId) ?? timezone;
+      if (!windows.has(zone)) windows.set(zone, this.tomorrowWindow(now, zone));
+      const window = windows.get(zone)!;
+      return row.startAt >= window.start && row.startAt < window.end;
+    });
+    const teacherGroups=new Set<string>();
     const events: NotificationEventInput[] = [];
     const teachers = await this.events.teacherIds(workspaceId);
     const [students, subjects] = await Promise.all([
@@ -159,19 +172,80 @@ export class NotificationScheduler implements OnModuleInit, OnModuleDestroy {
     const studentNames = new Map(students.map((student) => [student._id, student.name]));
     const subjectNames = new Map(subjects.map((subject) => [subject._id, subject.name]));
     for (const lesson of sessions) {
+      const zone = zones.get(lesson.scheduleId) ?? timezone;
+      const window = windows.get(zone)!;
+      const firstEvent = events.length;
       const recipients = await this.events.studentRecipients(workspaceId, lesson.studentId);
-      const time = new Intl.DateTimeFormat('id-ID', { timeZone: timezone, dateStyle: 'full', timeStyle: 'short' }).format(lesson.startAt);
+      const label = ({'Asia/Jakarta': 'WIB', 'Asia/Makassar': 'WITA', 'Asia/Jayapura': 'WIT'} as Record<string, string>)[zone] ?? zone;
+      const time = `${new Intl.DateTimeFormat('id-ID', { timeZone: zone, dateStyle: 'full', timeStyle: 'short' }).format(lesson.startAt)} ${label}`;
       const body = `Sesi ${subjectNames.get(lesson.subjectId) ?? 'belajar'} untuk siswa ${studentNames.get(lesson.studentId) ?? 'yang terdaftar'} dijadwalkan pada ${time}. Mohon siapkan kehadiran sesuai jadwal.`;
-      for (const teacherId of teachers) events.push({ workspaceId, recipientAccountId: teacherId, title: 'Pengingat jadwal les', body, route: `/teacher/sessions/${lesson._id}`, eventKey: `lesson-reminder:${lesson._id}:${window.date}:teacher:${teacherId}` });
+      const groupKey=lesson.groupId ? `${lesson.groupId}:${lesson.startAt.toISOString()}:${lesson.endAt.toISOString()}` : lesson._id;
+      if(!teacherGroups.has(groupKey)) {
+        teacherGroups.add(groupKey);
+        const count=lesson.groupId ? sessions.filter(row=>row.groupId===lesson.groupId && row.startAt.getTime()===lesson.startAt.getTime() && row.endAt.getTime()===lesson.endAt.getTime()).length : 1;
+        const teacherBody=count>1 ? `Sesi ${subjectNames.get(lesson.subjectId)??'belajar'} untuk ${count} siswa dijadwalkan pada ${time}. Mohon siapkan kegiatan belajar sesuai jadwal.` : body;
+        // Keep the actual child occurrence as resourceId: audience validation
+        // and deep links deliberately authorize a session, not a group UUID.
+        for (const teacherId of teachers) events.push({ workspaceId, recipientAccountId: teacherId, title: 'Pengingat jadwal les', body:teacherBody, route: `/teacher/sessions/${lesson._id}`, eventKey: `lesson-reminder:${lesson._id}:${window.date}:teacher:${teacherId}` });
+      }
       for (const parentId of recipients.parentIds) events.push({ workspaceId, recipientAccountId: parentId, title: 'Pengingat jadwal les', body, route: `/parent/sessions/${lesson._id}`, eventKey: `lesson-reminder:${lesson._id}:${window.date}:parent:${parentId}` });
       for (const studentId of recipients.studentIds) events.push({ workspaceId, recipientAccountId: studentId, title: 'Pengingat jadwal les', body, route: `/student/sessions/${lesson._id}`, eventKey: `lesson-reminder:${lesson._id}:${window.date}:student:${studentId}` });
+      for (let index = firstEvent; index < events.length; index++) events[index].deliveryExpiresAt = window.start;
     }
-    for (const event of events) event.deliveryExpiresAt = window.start;
     await this.events.deliverAfterCommit(await this.events.create(events));
   }
 
   private displayDate(date: string) {
     const [year, month, day] = date.split('-').map(Number);
     return new Intl.DateTimeFormat('id-ID', { dateStyle: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(year, month - 1, day)));
+  }
+
+  private async remindTuition(workspaceId: string, timezone: string, now: Date) {
+    const local = this.parts(now, timezone);
+    const today = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
+    const tomorrow = this.tomorrowWindow(now, timezone);
+    const preferences = await this.db.collection('tutorPreferences').findOne({workspaceId}).lean();
+    const forTeacher = preferences?.tuitionTeacherReminders !== false;
+    const forParent = preferences?.tuitionParentReminders !== false;
+    if (!forTeacher && !forParent) return;
+    const teacherIds = forTeacher ? await this.events.teacherIds(workspaceId) : [];
+    let after: string | undefined;
+    while (true) {
+      const fees = await this.db.collection('tuitionFees').find({workspaceId, status: 'unpaid',
+        dueDate: forTeacher ? {$lte: tomorrow.date} : {$in: [today, tomorrow.date]}, ...(after ? {_id: {$gt: after}} : {})})
+        .sort({_id: 1}).limit(200).lean();
+      if (!fees.length) break;
+      const students = await this.db.collection('students').find({workspaceId, status: 'active', _id: {$in: fees.map(fee => fee.studentId)}}).select('_id name').lean();
+      const names = new Map(students.map(student => [student._id, student.name]));
+      const events: NotificationEventInput[] = [];
+      for (const fee of fees) {
+        const name = names.get(fee.studentId);
+        if (!name) continue;
+        const amount = new Intl.NumberFormat('id-ID', {style: 'currency', currency: 'IDR', maximumFractionDigits: 0}).format(fee.amount);
+        if (fee.dueDate <= today) {
+          for (const teacherId of teacherIds) events.push({workspaceId, recipientAccountId: teacherId,
+            title: `Cek biaya bimbel ${name}`,
+            body: `Biaya bimbel ${name} sebesar ${amount}, jatuh tempo ${this.displayDate(fee.dueDate)}, masih tercatat belum lunas. Jika pembayaran sudah diterima, perbarui statusnya.`,
+            route: `/teacher/students/${fee.studentId}?tab=tuition`,
+            // Stable across fee revisions: at most one durable event per student/local day.
+            eventKey: `tuition-check:${fee._id}:${today}:teacher:${teacherId}`,
+            tuitionFeeVersion: fee.version, deliveryExpiresAt: tomorrow.start,
+          });
+        }
+        if (!forParent || (fee.dueDate !== today && fee.dueDate !== tomorrow.date)) continue;
+        const stage = fee.dueDate === today ? 'today' : 'tomorrow';
+        const {parentIds} = await this.events.studentRecipients(workspaceId, fee.studentId);
+        for (const parentId of parentIds) events.push({workspaceId, recipientAccountId: parentId,
+          title: stage === 'today' ? 'Biaya bimbel jatuh tempo hari ini' : 'Pengingat biaya bimbel besok',
+          body: `Biaya bimbel ${name} sebesar ${amount} jatuh tempo ${stage === 'today' ? 'hari ini' : 'besok'}, ${this.displayDate(fee.dueDate)}. Buka detail untuk menghubungi Guru.`,
+          route: `/parent/students/${fee.studentId}?tab=tuition`,
+          eventKey: `tuition-due:${fee._id}:${fee.version}:${fee.dueDate}:${stage}:parent:${parentId}`,
+          deliveryExpiresAt: tomorrow.start,
+        });
+      }
+      await this.events.deliverAfterCommit(await this.events.create(events));
+      after = fees[fees.length - 1]._id;
+      if (fees.length < 200) break;
+    }
   }
 }

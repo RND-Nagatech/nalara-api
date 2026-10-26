@@ -45,3 +45,66 @@ test('H-3/H-1 subscription reminders are not Pro-gated and do not create a missi
   assert.equal(eventsByKey.size, 2); assert.equal(db.data.subscriptions.length, 2);
   assert.ok([...eventsByKey.values()].every(row => row.route === '/teacher/subscription' && row.deliveryExpiresAt > now));
 });
+
+test('group reminders notify the teacher once while parent/student events remain child-specific',async()=>{
+  const startAt=new Date('2026-10-19T02:00:00Z'),endAt=new Date('2026-10-19T03:00:00Z');
+  const db=memoryDb({
+    users:[{_id:'teacher',workspaceId:'w',role:'teacher',timezone:'Asia/Jakarta'}],
+    students:[{_id:'a',workspaceId:'w',name:'Anak A'},{_id:'b',workspaceId:'w',name:'Anak B'}],
+    subjects:[{_id:'piano',workspaceId:'w',name:'Piano'}],
+    sessions:['a','b'].map(id=>({_id:`session-${id}`,workspaceId:'w',studentId:id,subjectId:'piano',groupId:'group',startAt,endAt,status:'scheduled'})),
+  });
+  const created=[];
+  const events={teacherIds:async()=>['teacher'],studentRecipients:async(_,id)=>({parentIds:[`parent-${id}`],studentIds:[`student-${id}`]}),create:async rows=>{created.push(...rows);return [];},deliverAfterCommit:async()=>{}};
+  const worker=new NotificationScheduler({get:()=>undefined},db,events,{canUse:async()=>true});
+  await worker.run(new Date('2026-10-18T03:00:00Z'));
+  assert.equal(created.length,5);
+  const teacherEvents=created.filter(row=>row.recipientAccountId==='teacher');
+  assert.equal(teacherEvents.length,1); assert.match(teacherEvents[0].body,/2 siswa/);
+  const {NotificationAudienceService}=source('modules/notifications/notification-audience.service.ts',{'../../database/database.module':{Database:class {}}});
+  // Ignore the fixed fixture deadline; exercise the real resource/role resolver.
+  assert.deepEqual(await new NotificationAudienceService(db).resolve({...teacherEvents[0],deliveryExpiresAt:undefined}),{accountType:'teacher',accountIds:['teacher']});
+  for(const id of ['a','b']) {
+    const parent=created.find(row=>row.recipientAccountId===`parent-${id}`);
+    assert.equal(parent.route,`/parent/sessions/session-${id}`);
+    assert.match(parent.body,new RegExp(`Anak ${id.toUpperCase()}`));
+    assert.ok(!parent.body.includes(`Anak ${id==='a'?'B':'A'}`));
+  }
+});
+
+test('session H-1 uses the series timezone across midnight, with stable keys after teacher-zone changes', async () => {
+  const db = memoryDb({
+    users: [{_id: 'teacher', workspaceId: 'w', role: 'teacher', timezone: 'Asia/Jakarta'}],
+    students: [{_id: 'child', workspaceId: 'w', name: 'Anak'}],
+    subjects: [{_id: 'subject', workspaceId: 'w', name: 'Musik'}],
+    schedules: [
+      {_id: 'wit', workspaceId: 'w', timezone: 'Asia/Jayapura'},
+      {_id: 'wib', workspaceId: 'w', timezone: 'Asia/Jakarta'},
+      {_id: 'wita', workspaceId: 'w', timezone: 'Asia/Makassar'},
+      {_id: 'foreign', workspaceId: 'other', timezone: 'Asia/Jakarta'},
+    ],
+    // At 16:30Z it is already Oct 19 WITA/WIT, but still Oct 18 WIB.
+    sessions: [
+      {_id: 'wit-tomorrow', workspaceId: 'w', scheduleId: 'wit', studentId: 'child', subjectId: 'subject', startAt: new Date('2026-10-19T15:30:00Z'), status: 'scheduled'},
+      {_id: 'wita-tomorrow', workspaceId: 'w', scheduleId: 'wita', studentId: 'child', subjectId: 'subject', startAt: new Date('2026-10-19T16:30:00Z'), status: 'scheduled'},
+      {_id: 'wib-today', workspaceId: 'w', scheduleId: 'wib', studentId: 'child', subjectId: 'subject', startAt: new Date('2026-10-18T16:45:00Z'), status: 'scheduled'},
+      {_id: 'wib-tomorrow', workspaceId: 'w', scheduleId: 'wib', studentId: 'child', subjectId: 'subject', startAt: new Date('2026-10-19T02:00:00Z'), status: 'scheduled'},
+      {_id: 'foreign-session', workspaceId: 'other', scheduleId: 'foreign', startAt: new Date('2026-10-19T15:30:00Z'), status: 'scheduled'},
+    ],
+  });
+  const batches = [];
+  const events = {teacherIds: async () => ['teacher'], studentRecipients: async () => ({parentIds: ['parent'], studentIds: ['student']}), create: async rows => {batches.push(rows); return [];}, deliverAfterCommit: async () => {}};
+  const worker = new NotificationScheduler({get: () => undefined}, db, events, {canUse: async () => true});
+  const now = new Date('2026-10-18T16:30:00Z');
+  await worker.remindSessions('w', 'Asia/Jakarta', now);
+  await worker.remindSessions('w', 'Asia/Jayapura', now);
+  assert.deepEqual(batches[0], batches[1]);
+  assert.equal(batches[0].length, 9);
+  const wib = batches[0].filter(e => e.route.endsWith('/wib-tomorrow'));
+  const wit = batches[0].filter(e => e.route.endsWith('/wit-tomorrow'));
+  const wita = batches[0].filter(e => e.route.endsWith('/wita-tomorrow'));
+  assert.ok(wib.every(e => e.body.includes('WIB') && e.deliveryExpiresAt.toISOString() === '2026-10-18T17:00:00.000Z'));
+  assert.ok(wit.every(e => e.body.includes('WIT') && e.deliveryExpiresAt.toISOString() === '2026-10-19T15:00:00.000Z'));
+  assert.ok(wita.every(e => e.body.includes('WITA') && e.deliveryExpiresAt.toISOString() === '2026-10-19T16:00:00.000Z'));
+  assert.equal(wib.length, 3); assert.equal(wit.length, 3); assert.equal(wita.length, 3);
+});

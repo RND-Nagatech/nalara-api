@@ -15,8 +15,11 @@ export class SubscriptionGuard implements CanActivate {
     if (feature) { await this.subscriptions.requireFeature(req.user.workspaceId, feature); return true; }
     const path = req.path.replace(/^\/api\/v1/, '');
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || /^\/(auth|subscriptions|notifications)(\/|$)/.test(path)) return true;
-    // Viewing/hiding onboarding never grants a subscription or writes lesson data.
+    // Acknowledging the first-use tutorial never grants access or writes lesson data.
     if (req.method === 'PATCH' && path === '/teaching-guide/preferences') return true;
+    if (req.method === 'PATCH' && path === '/me/avatar') return true;
+    if (req.method === 'PATCH' && path === '/me/phone') return true;
+    if (req.method === 'PATCH' && path === '/me/timezone') return true;
     if (req.method === 'DELETE' && path === '/account-deletion') return true;
     // Expired Pro users may reduce active-student usage before choosing Basic.
     // Only the reversible archive action is allowed, never arbitrary edits.

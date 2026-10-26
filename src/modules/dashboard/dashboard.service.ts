@@ -3,6 +3,9 @@ import { ScopedService } from '../../common/scoped.service';
 import type { Principal } from '../../common/api';
 import { aggregateProgress } from '../learning-plans/progress.rules';
 import { dashboardDayWindow, dashboardPreviewLimit } from './dashboard.rules';
+import { groupPipeline, namedGroups } from '../schedules/schedule-groups';
+import type { LessonSession } from '../../database/entities';
+import { teacherNotificationScope } from '../notifications/teacher-notification-scope';
 
 @Injectable()
 export class DashboardService {
@@ -11,11 +14,12 @@ export class DashboardService {
     const {from,to,localDate}=dashboardDayWindow(now,actor.timezone);
     const workspaceId=actor.workspaceId, db=this.scope.db;
     const today={workspaceId,startAt:{$gte:from,$lt:to},status:{$ne:'cancelled' as const}};
-    const [activeStudents,sessionsToday,todaySessions,unreadNotifications,plans,pending]=await Promise.all([
+    const [activeStudents,dailyGroups,unreadNotifications,plans,pending]=await Promise.all([
       db.collection('students').countDocuments({workspaceId,status:'active'}),
-      db.collection('sessions').countDocuments(today),
-      db.collection('sessions').find(today).sort({startAt:1,_id:1}).limit(dashboardPreviewLimit).lean(),
-      db.collection('notifications').countDocuments({workspaceId,readAt:{$exists:false},$or:[{recipientAccountId:{$exists:false}},{recipientAccountId:actor._id}]}),
+      db.collection('sessions').aggregate<{items:{row:LessonSession;members:LessonSession[]}[];total:{count:number}[]}>([
+        ...groupPipeline(today,true),{$facet:{items:[{$limit:dashboardPreviewLimit}],total:[{$count:'count'}]}},
+      ]).option({maxTimeMS:10000}),
+      teacherNotificationScope(db,actor).then(filter => db.collection('notifications').countDocuments({workspaceId,readAt:{$exists:false},...filter})),
       db.collection('plans').find({workspaceId,startAt:{$lt:to},endAt:{$gte:from}}).sort({createdAt:-1}).limit(10).lean(),
       db.collection('sessions').aggregate<{total:number}>([
         {$match:{workspaceId,status:{$ne:'cancelled'},endAt:{$lte:now}}},
@@ -26,18 +30,10 @@ export class DashboardService {
         {$match:{'publishedReport.0':{$exists:false}}},{$count:'total'},
       ]).option({maxTimeMS:10000}),
     ]);
-    const [students,subjects,targets]=await Promise.all([
-      db.collection('students').find({workspaceId,_id:{$in:todaySessions.map(lesson=>lesson.studentId)}}).select('_id name grade').lean(),
-      db.collection('subjects').find({workspaceId,_id:{$in:todaySessions.map(lesson=>lesson.subjectId)}}).select('_id name').lean(),
-      db.collection('targets').find({workspaceId,planId:{$in:plans.map(plan=>plan._id)}}).lean(),
-    ]);
-    const studentMap=new Map(students.map(student=>[student._id,student]));
-    const subjectMap=new Map(subjects.map(subject=>[subject._id,subject]));
-    const enrichedSessions=todaySessions.map(lesson=>{
-      const student=studentMap.get(lesson.studentId), subject=subjectMap.get(lesson.subjectId);
-      if (!student || !subject) throw new NotFoundException('Data siswa atau bidang belajar pada jadwal tidak tersedia. Periksa kembali jadwal les.');
-      return {...lesson,studentName:student.name,studentGrade:student.grade??'',subjectName:subject.name};
-    });
+    const enrichedSessions=await namedGroups(this.scope,workspaceId,dailyGroups[0]?.items??[]);
+    if(enrichedSessions.some(lesson=>!lesson.subjectName || lesson.participants.some(student=>!student.studentName))) throw new NotFoundException('Data siswa atau bidang belajar pada jadwal tidak tersedia. Periksa kembali jadwal les.');
+    const sessionsToday=dailyGroups[0]?.total[0]?.count??0;
+    const targets=await db.collection('targets').find({workspaceId,planId:{$in:plans.map(plan=>plan._id)}}).lean();
     // Retain the existing plan contract for clients, using canonical aggregation.
     const learningPlans=plans.map(plan=>({...plan,...aggregateProgress(targets.filter(target=>target.planId===plan._id))}));
     return {teacher:actor,activeStudents,sessionsToday,pendingReports:pending[0]?.total??0,unreadNotifications,

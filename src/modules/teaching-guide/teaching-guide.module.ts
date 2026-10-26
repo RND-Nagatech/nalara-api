@@ -15,8 +15,8 @@ export class TeachingGuideController {
   get(@Actor() actor: Principal) { return this.service.get(actor); }
 
   @Patch('preferences')
-  preferences(@Actor() actor: Principal, @Body() dto: TeachingGuidePreferencesDto) {
-    return this.service.preferences(actor, dto.dismissed);
+  preferences(@Actor() actor: Principal, @Body() _dto: TeachingGuidePreferencesDto) {
+    return this.service.preferences(actor);
   }
 }
 

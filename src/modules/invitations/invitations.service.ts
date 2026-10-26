@@ -13,33 +13,55 @@ import { assertUsableInvitation, inactiveReferralCode, referralMessages, wrongRe
 export class InvitationsService {
   constructor(private readonly db:Database,private readonly scope:ScopedService) {}
   async issueStudent(actor:Principal,id:string) {
-    const code = createReferralCode(), expiresAt = new Date(Date.now()+7*86400_000);
+    const code = createReferralCode(), invitationId = randomUUID();
     const invitation = await this.db.connection.transaction(async session=>{
       await this.scope.activeStudent(id,actor,session);
-      await this.db.collection('students').updateOne({_id:id,workspaceId:actor.workspaceId},{$inc:{invitationVersion:1}},{session});
-      await this.db.collection('invitations').updateMany({workspaceId:actor.workspaceId,studentId:id,audience:'student',redeemedAt:{$exists:false},revokedAt:{$exists:false}},{$set:{revokedAt:new Date()}},{session});
-      const [invite] = await this.db.collection('invitations').create([{studentId:id,audience:'student',workspaceId:actor.workspaceId,tokenHash:referralCodeHash(code.raw),expiresAt}],{session});
+      await this.db.collection('students').updateOne({_id:id,workspaceId:actor.workspaceId},{$inc:{invitationVersion:1},$set:{currentInvitationId:invitationId}},{session});
+      await this.db.collection('invitations').updateMany({workspaceId:actor.workspaceId,studentId:id,audience:'student',revokedAt:{$exists:false}},{$set:{revokedAt:new Date()}},{session});
+      const [invite] = await this.db.collection('invitations').create([{_id:invitationId,studentId:id,audience:'student',workspaceId:actor.workspaceId,tokenHash:referralCodeHash(code.raw),expiresAt:null}],{session});
       await this.scope.audit(actor,'invitation.student.created',invite._id,session);
       return invite.toObject();
     });
-    return {_id:invitation._id,studentId:id,audience:'student',token:code.display,expiresAt};
+    return {_id:invitation._id,studentId:id,audience:'student',token:code.display,expiresAt:null};
   }
   async issueFamily(actor:Principal,id:string) {
-    const code = createReferralCode(), expiresAt = new Date(Date.now()+7*86400_000);
+    const code = createReferralCode(), invitationId = randomUUID();
     const invitation = await this.db.connection.transaction(async session=>{
       await this.scope.get('families',id,actor,session);
       if (!await this.db.collection('students').exists({workspaceId:actor.workspaceId,familyId:id,status:'active'}).session(session)) throw new BadRequestException('Hubungkan minimal satu siswa aktif ke Orang Tua ini sebelum membuat kode keluarga');
-      await this.db.collection('families').updateOne({_id:id,workspaceId:actor.workspaceId},{$inc:{invitationVersion:1}},{session});
-      await this.db.collection('invitations').updateMany({workspaceId:actor.workspaceId,familyId:id,audience:'parent',redeemedAt:{$exists:false},revokedAt:{$exists:false}},{$set:{revokedAt:new Date()}},{session});
-      const [invite] = await this.db.collection('invitations').create([{familyId:id,audience:'parent',workspaceId:actor.workspaceId,tokenHash:referralCodeHash(code.raw),expiresAt}],{session});
+      await this.db.collection('families').updateOne({_id:id,workspaceId:actor.workspaceId},{$inc:{invitationVersion:1},$set:{currentInvitationId:invitationId}},{session});
+      await this.db.collection('invitations').updateMany({workspaceId:actor.workspaceId,familyId:id,audience:'parent',revokedAt:{$exists:false}},{$set:{revokedAt:new Date()}},{session});
+      const [invite] = await this.db.collection('invitations').create([{_id:invitationId,familyId:id,audience:'parent',workspaceId:actor.workspaceId,tokenHash:referralCodeHash(code.raw),expiresAt:null}],{session});
       await this.scope.audit(actor,'invitation.family.created',invite._id,session);
       return invite.toObject();
     });
-    return {_id:invitation._id,familyId:id,audience:'parent',token:code.display,expiresAt};
+    return {_id:invitation._id,familyId:id,audience:'parent',token:code.display,expiresAt:null};
+  }
+
+  private async latestInvitation(workspaceId:string,target:{familyId?:string;studentId?:string},audience:'parent'|'student',currentInvitationId?:string,session?:ClientSession) {
+    const filter = {workspaceId,...target,audience};
+    if (currentInvitationId) return this.db.collection('invitations').findOne({...filter,_id:currentInvitationId}).session(session??null).lean();
+    // Legacy records have no pointer: use the newest record, even if revoked,
+    // so an older used/unrevoked code can never become active again.
+    const [latest] = await this.db.collection('invitations').find(filter).sort({createdAt:-1,_id:-1}).limit(1).session(session??null).lean();
+    return latest ?? null;
+  }
+
+  private latestPage(invitation:Invitation|null,query:ListQuery) {
+    // History is retained for audits, but only the current card is public here.
+    const items = invitation && query.page===1 ? [{_id:invitation._id,studentId:invitation.studentId,familyId:invitation.familyId,
+      audience:invitation.audience,expiresAt:null,revokedAt:invitation.revokedAt,lastUsedAt:invitation.lastUsedAt??invitation.redeemedAt,
+      useCount:invitation.useCount??(invitation.redeemedAt?1:0),createdAt:invitation.createdAt}] : [];
+    return {items,total:invitation?1:0,page:query.page,limit:1};
+  }
+
+  async studentInvitations(actor:Principal,id:string,query:ListQuery) {
+    const student = await this.scope.get('students',id,actor);
+    return this.latestPage(await this.latestInvitation(actor.workspaceId,{studentId:id},'student',student.currentInvitationId),query);
   }
   async familyInvitations(actor:Principal,id:string,query:ListQuery) {
-    await this.scope.get('families',id,actor);
-    return this.scope.list('invitations',actor,query,{familyId:id,audience:'parent'});
+    const family = await this.scope.get('families',id,actor);
+    return this.latestPage(await this.latestInvitation(actor.workspaceId,{familyId:id},'parent',family.currentInvitationId),query);
   }
   async revokeFamily(actor:Principal,id:string,inviteId:string) {
     await this.scope.get('families',id,actor);
@@ -76,7 +98,7 @@ export class InvitationsService {
       if (!students.length) throw new UnauthorizedException('Belum ada anak aktif yang terhubung. Hubungi Guru.');
       return {role:'parent' as const,name:family.parentName,phone:family.parentPhone,familyName:family.name,familyId:family._id,students};
     }
-    const student = await this.db.collection('students').findOne({_id:account.studentId,workspaceId:account.workspaceId,status:'active'}).select('_id name grade').session(session??null).lean();
+    const student = await this.db.collection('students').findOne({_id:account.studentId,workspaceId:account.workspaceId,status:'active'}).select('_id name grade avatarId').session(session??null).lean();
     if (!student) throw new UnauthorizedException('Akses siswa tidak tersedia. Hubungi Guru.');
     return {role:'student' as const,name:student.name,students:[student]};
   }
@@ -86,6 +108,14 @@ export class InvitationsService {
     if (audience && !['student','parent'].includes(audience)) throw new BadRequestException(referralMessages.invalidRole);
     // Do not filter out inactive records: their state determines the message.
     const invitation=await this.db.collection('invitations').findOne({tokenHash:referralCodeHash(normalized)}).session(session??null).lean();
+    assertUsableInvitation(invitation);
+    const target = invitation.audience==='parent' ? {familyId:invitation.familyId!} : {studentId:invitation.studentId!};
+    const record = invitation.audience==='parent'
+      ? await this.db.collection('families').findOne({_id:invitation.familyId,workspaceId:invitation.workspaceId}).session(session??null).lean()
+      : await this.db.collection('students').findOne({_id:invitation.studentId,workspaceId:invitation.workspaceId}).session(session??null).lean();
+    if (!record) throw inactiveReferralCode();
+    const latest = await this.latestInvitation(invitation.workspaceId,target,invitation.audience,record.currentInvitationId,session);
+    if (latest?._id!==invitation._id) throw inactiveReferralCode();
     assertUsableInvitation(invitation,audience);
     return invitation;
   }
@@ -109,7 +139,7 @@ export class InvitationsService {
       const candidate=await this.usableInvitation(dto.token,dto.audience,session);
       const workspace = await this.db.collection('workspaces').updateOne({_id: candidate.workspaceId, deletionRequestedAt: {$exists: false}}, {$inc: {scheduleVersion: 1}}, {session});
       if (!workspace.matchedCount) throw inactiveReferralCode();
-      const invite = await this.db.collection('invitations').findOneAndUpdate({_id:candidate._id,workspaceId:candidate.workspaceId,audience:dto.audience,expiresAt:{$gt:new Date()},revokedAt:{$exists:false},redeemedAt:{$exists:false}},{$set:{redeemedAt:new Date()}},{session,returnDocument:'after'}).lean();
+      const invite = await this.db.collection('invitations').findOneAndUpdate({_id:candidate._id,workspaceId:candidate.workspaceId,audience:dto.audience,revokedAt:{$exists:false}},{$set:{lastUsedAt:new Date()},$inc:{useCount:1}},{session,returnDocument:'after'}).lean();
       if (!invite) throw inactiveReferralCode();
       if (invite.audience==='parent') await this.db.collection('families').updateOne({_id:invite.familyId,workspaceId:invite.workspaceId},{$inc:{invitationVersion:1}},{session});
       else await this.db.collection('students').updateOne({_id:invite.studentId,workspaceId:invite.workspaceId},{$inc:{invitationVersion:1}},{session});
@@ -125,7 +155,7 @@ export class InvitationsService {
     const tokens = this.tokens();
     return this.db.connection.transaction(async session=>{
       const saved = await this.db.collection('portalSessions').findOneAndUpdate({refreshHash:referralCodeHash(refreshToken),expiresAt:{$gt:new Date()}},{$set:{accessHash:referralCodeHash(tokens.accessToken),refreshHash:referralCodeHash(tokens.refreshToken),accessExpiresAt:tokens.accessExpiresAt,expiresAt:tokens.expiresAt}},{session,returnDocument:'after'}).lean();
-      if (!saved) throw new UnauthorizedException('Sesi referral berakhir. Minta kode baru kepada Guru.');
+      if (!saved) throw new UnauthorizedException('Sesi referral berakhir. Silakan masuk kembali menggunakan kode referral terbaru dari Guru.');
       const account = await this.db.collection('portalAccounts').findOne({_id:saved.accountId,status:'active'}).session(session).lean();
       if (!account) throw new UnauthorizedException('Akses dicabut. Hubungi Guru.');
       return {...tokens,profile:await this.profile(account,session)};
@@ -134,4 +164,49 @@ export class InvitationsService {
   // Revocation needs the refresh credential, not a valid child profile. It must
   // still work after access expiry or after the last child has been archived.
   async logout(refreshToken:string) { await this.db.collection('portalSessions').deleteOne({refreshHash:referralCodeHash(refreshToken)}); return {message:'Berhasil keluar'}; }
+
+  /**
+   * Portal accounts are access accounts, not owners of the teacher's
+   * learning records. Deleting one therefore removes the portal identity,
+   * sessions, devices, and inbox rows while retaining the child/family data
+   * managed by the teacher. A referral can be redeemed again only if the
+   * teacher still chooses to issue/keep access for that relationship.
+   */
+  async deletePortalAccount(account: Pick<PortalAccount, '_id'|'workspaceId'|'role'>) {
+    await this.db.connection.transaction(async session => {
+      const current = await this.db.collection('portalAccounts').findOne({
+        _id: account._id,
+        workspaceId: account.workspaceId,
+        role: account.role,
+        status: 'active',
+      }).session(session).lean();
+      if (!current) throw new UnauthorizedException('Akun portal sudah tidak aktif.');
+
+      await this.db.collection('portalSessions').deleteMany({accountId: current._id}, {session});
+      await this.db.collection('notificationDevices').deleteMany({
+        workspaceId: current.workspaceId,
+        accountType: current.role,
+        accountId: current._id,
+      }, {session});
+      await this.db.collection('notifications').deleteMany({
+        workspaceId: current.workspaceId,
+        recipientAccountId: current._id,
+      }, {session});
+      await this.db.collection('portalAccounts').deleteOne({
+        _id: current._id,
+        workspaceId: current.workspaceId,
+        status: 'active',
+      }, {session});
+      await this.db.collection('audits').create([{
+        workspaceId: current.workspaceId,
+        actorId: current._id,
+        action: 'portal.account.deleted',
+        resourceId: current._id,
+      }], {session});
+    });
+    return {
+      accepted: true,
+      message: 'Akun portal, sesi, perangkat, dan inbox Anda telah dihapus. Data siswa/keluarga yang dikelola Guru tidak ikut dihapus.',
+    };
+  }
 }

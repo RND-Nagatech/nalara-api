@@ -10,13 +10,12 @@ export const referralMessages = {
 
 export const wrongReferralCode = () => new UnauthorizedException(referralMessages.wrongCode);
 export const inactiveReferralCode = () => new UnauthorizedException(referralMessages.inactiveCode);
-type InvitationState = Pick<Invitation, 'audience' | 'familyId' | 'studentId' | 'expiresAt' | 'revokedAt' | 'redeemedAt'>;
+type InvitationState = Pick<Invitation, 'audience' | 'familyId' | 'studentId' | 'revokedAt'>;
 
 /** Diagnose only the secret's state; never include the target or owner in errors. */
-export function assertUsableInvitation(invitation:InvitationState | null, audience?:'student'|'parent', now:Date = new Date()):asserts invitation is InvitationState {
+export function assertUsableInvitation(invitation:InvitationState | null, audience?:'student'|'parent'):asserts invitation is InvitationState {
   if (!invitation) throw wrongReferralCode();
-  if (invitation.revokedAt!==undefined || invitation.redeemedAt!==undefined ||
-      !(invitation.expiresAt instanceof Date) || !Number.isFinite(invitation.expiresAt.getTime()) || invitation.expiresAt<=now ||
+  if (invitation.revokedAt!==undefined ||
       !['student','parent'].includes(invitation.audience) ||
       (invitation.audience==='parent' ? !invitation.familyId : !invitation.studentId)) {
     throw inactiveReferralCode();

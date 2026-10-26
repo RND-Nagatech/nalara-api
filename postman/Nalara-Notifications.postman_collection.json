@@ -1,0 +1,299 @@
+{
+  "info": {
+    "_postman_id": "0f4d53be-9013-4a30-9a30-7b68a1ad8a41",
+    "name": "NALARA - Testing Notifikasi",
+    "description": "Collection untuk menguji inbox dan push notification NALARA melalui alur API yang sebenarnya.\n\nUrutan praktis:\n1. Isi variabel teacherEmail dan teacherPassword, lalu jalankan Login Guru.\n2. Ambil siswa dan bidang belajar, atau jalankan request setup opsional.\n3. Siapkan referral Orang Tua/Siswa lalu redeem portal bila ingin menguji inbox portal.\n4. Buat jadwal, catat hadir, buat target/progress, dan publish laporan. Aksi tersebut membuat notifikasi melalui backend.\n5. Jalankan request inbox untuk memeriksa penerima yang tepat.\n6. Scheduler H-1 berjalan otomatis sesuai NOTIFICATION_SCHEDULER_INTERVAL_MINUTES (default 15 menit); tidak ada endpoint trigger publik agar tidak bisa disalahgunakan.\n\nCatatan:\n- Semua respons sukses dibungkus dalam {data: ...}.\n- Collection variable bisa diubah lewat tab Variables setelah import.\n- Gunakan token FCM perangkat nyata untuk menguji push foreground/background. Token contoh hanya menguji registrasi device dan dapat membuat delivery gagal.\n- Jangan memasukkan credential production ke collection atau environment yang dibagikan.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key": "baseUrl", "value": "http://localhost:3100/api/v1", "type": "string"},
+    {"key": "teacherEmail", "value": "ganti-email@example.com", "type": "string"},
+    {"key": "teacherPassword", "value": "GantiPassword!123", "type": "string"},
+    {"key": "teacherName", "value": "Postman Guru", "type": "string"},
+    {"key": "teacherPhone", "value": "081234567890", "type": "string"},
+    {"key": "teacherAccessToken", "value": "", "type": "string"},
+    {"key": "teacherRefreshToken", "value": "", "type": "string"},
+    {"key": "studentId", "value": "", "type": "string"},
+    {"key": "studentName", "value": "Siswa Postman", "type": "string"},
+    {"key": "subjectId", "value": "", "type": "string"},
+    {"key": "familyId", "value": "", "type": "string"},
+    {"key": "parentReferralToken", "value": "", "type": "string"},
+    {"key": "studentReferralToken", "value": "", "type": "string"},
+    {"key": "parentAccessToken", "value": "", "type": "string"},
+    {"key": "parentRefreshToken", "value": "", "type": "string"},
+    {"key": "studentAccessToken", "value": "", "type": "string"},
+    {"key": "studentRefreshToken", "value": "", "type": "string"},
+    {"key": "scheduleId", "value": "", "type": "string"},
+    {"key": "sessionId", "value": "", "type": "string"},
+    {"key": "planId", "value": "", "type": "string"},
+    {"key": "targetId", "value": "", "type": "string"},
+    {"key": "targetVersion", "value": "0", "type": "string"},
+    {"key": "reportId", "value": "", "type": "string"},
+    {"key": "notificationId", "value": "", "type": "string"},
+    {"key": "parentNotificationId", "value": "", "type": "string"},
+    {"key": "studentNotificationId", "value": "", "type": "string"},
+    {"key": "teacherDeviceToken", "value": "replace-with-real-fcm-token-teacher", "type": "string"},
+    {"key": "parentDeviceToken", "value": "replace-with-real-fcm-token-parent", "type": "string"},
+    {"key": "studentDeviceToken", "value": "replace-with-real-fcm-token-student", "type": "string"},
+    {"key": "scheduleStartAt", "value": "", "type": "string"},
+    {"key": "scheduleEndAt", "value": "", "type": "string"},
+    {"key": "planStartAt", "value": "", "type": "string"},
+    {"key": "planEndAt", "value": "", "type": "string"},
+    {"key": "rescheduleStartAt", "value": "", "type": "string"},
+    {"key": "rescheduleEndAt", "value": "", "type": "string"},
+    {"key": "scenarioSuffix", "value": "", "type": "string"}
+  ],
+  "item": [
+    {
+      "name": "0 - Cek API",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health/live",
+            "description": "Memastikan proses API hidup sebelum menjalankan skenario. Gunakan /health/ready untuk memeriksa MongoDB dan Redis juga."
+          },
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('API merespons sukses', function () { pm.expect(pm.response.code).to.be.within(200, 299); });"]}}]
+        }
+      ]
+    },
+    {
+      "name": "1 - Autentikasi Guru",
+      "item": [
+        {
+          "name": "Register Guru (opsional, sekali)",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"name\": \"{{teacherName}}\",\n  \"email\": \"{{teacherEmail}}\",\n  \"phone\": \"{{teacherPhone}}\",\n  \"password\": \"{{teacherPassword}}\",\n  \"passwordConfirmation\": \"{{teacherPassword}}\"\n}", "options": {"raw": {"language": "json"}}},
+            "url": "{{baseUrl}}/auth/register",
+            "description": "Jalankan hanya jika akun Guru belum ada. Password harus mengandung huruf besar, kecil, angka, dan simbol."
+          },
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const json = pm.response.json();", "const data = json.data || json;", "pm.test('Registrasi sukses', function () { pm.expect(pm.response.code).to.be.within(200, 299); });", "if (data.accessToken) pm.collectionVariables.set('teacherAccessToken', data.accessToken);", "if (data.refreshToken) pm.collectionVariables.set('teacherRefreshToken', data.refreshToken);"]}}]
+        },
+        {
+          "name": "Login Guru",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"email\": \"{{teacherEmail}}\",\n  \"password\": \"{{teacherPassword}}\"\n}", "options": {"raw": {"language": "json"}}},
+            "url": "{{baseUrl}}/auth/login",
+            "description": "Mengisi teacherAccessToken dan teacherRefreshToken secara otomatis."
+          },
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const json = pm.response.json();", "const data = json.data || json;", "pm.test('Login sukses', function () { pm.expect(pm.response.code).to.equal(200); });", "pm.collectionVariables.set('teacherAccessToken', data.accessToken);", "pm.collectionVariables.set('teacherRefreshToken', data.refreshToken);"]}}]
+        },
+        {
+          "name": "Refresh token Guru",
+          "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"refreshToken\": \"{{teacherRefreshToken}}\"\n}", "options": {"raw": {"language": "json"}}},
+            "url": "{{baseUrl}}/auth/refresh"
+          },
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Refresh sukses', function () { pm.expect(pm.response.code).to.equal(200); });", "pm.collectionVariables.set('teacherAccessToken', data.accessToken);", "pm.collectionVariables.set('teacherRefreshToken', data.refreshToken);"]}}]
+        },
+        {
+          "name": "Profil Guru",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/me"}
+        }
+      ]
+    },
+    {
+      "name": "2 - Persiapan Data dan Portal",
+      "item": [
+        {
+          "name": "Ambil siswa aktif → studentId",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/students?status=active&page=1&limit=100"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || {};", "const item = (data.items || [])[0];", "pm.test('Ada siswa aktif', function () { pm.expect(item && item._id, 'Buat siswa atau isi studentId manual').to.be.ok; });", "if (item) { pm.collectionVariables.set('studentId', item._id); pm.collectionVariables.set('studentName', item.name); }"]}}]
+        },
+        {
+          "name": "Buat siswa test (opsional)",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"name\": \"{{studentName}}\",\n  \"grade\": \"Kelas 6 SD\",\n  \"notes\": \"Data siswa untuk pengujian notifikasi\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/students"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Siswa dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('studentId', data._id);"]}}]
+        },
+        {
+          "name": "Ambil bidang belajar → subjectId",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/subjects?page=1&limit=100"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || {};", "const item = (data.items || [])[0];", "pm.test('Ada bidang belajar', function () { pm.expect(item && item._id, 'Buat bidang belajar atau isi subjectId manual').to.be.ok; });", "if (item) pm.collectionVariables.set('subjectId', item._id);"]}}]
+        },
+        {
+          "name": "Buat bidang belajar test (opsional)",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"name\": \"Keterampilan Postman {{scenarioSuffix}}\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/subjects"},
+          "event": [{"listen": "prerequest", "script": {"type": "text/javascript", "exec": ["pm.collectionVariables.set('scenarioSuffix', String(Date.now()));"]}}, {"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Bidang belajar dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('subjectId', data._id);"]}}]
+        },
+        {
+          "name": "Buat keluarga test + kaitkan siswa (opsional)",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"parentName\": \"Orang Tua Postman\",\n  \"parentPhone\": \"081298765432\",\n  \"studentIds\": [\"{{studentId}}\"]\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/families"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Keluarga dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('familyId', data._id);"]}}]
+        },
+        {
+          "name": "Buat kode referral Orang Tua",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/families/{{familyId}}/invitations", "description": "Keluarga harus memiliki minimal satu siswa aktif."},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Referral Orang Tua dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('parentReferralToken', data.token);"]}}]
+        },
+        {
+          "name": "Buat kode referral Siswa",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/students/{{studentId}}/invitations"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Referral Siswa dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('studentReferralToken', data.token);"]}}]
+        },
+        {
+          "name": "Redeem portal Orang Tua",
+          "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{parentReferralToken}}\",\n  \"audience\": \"parent\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/invitations/redeem"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Portal Orang Tua aktif', function () { pm.expect(pm.response.code).to.equal(200); });", "pm.collectionVariables.set('parentAccessToken', data.accessToken);", "pm.collectionVariables.set('parentRefreshToken', data.refreshToken);"]}}]
+        },
+        {
+          "name": "Redeem portal Siswa",
+          "request": {"method": "POST", "header": [{"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{studentReferralToken}}\",\n  \"audience\": \"student\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/invitations/redeem"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Portal Siswa aktif', function () { pm.expect(pm.response.code).to.equal(200); });", "pm.collectionVariables.set('studentAccessToken', data.accessToken);", "pm.collectionVariables.set('studentRefreshToken', data.refreshToken);"]}}]
+        }
+      ]
+    },
+    {
+      "name": "3 - Trigger Notifikasi Domain",
+      "item": [
+        {
+          "name": "Buat jadwal test untuk presensi dan reminder",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"studentIds\": [\"{{studentId}}\"],\n  \"subjectId\": \"{{subjectId}}\",\n  \"startAt\": \"{{scheduleStartAt}}\",\n  \"endAt\": \"{{scheduleEndAt}}\",\n  \"timezone\": \"Asia/Jakarta\",\n  \"recurrence\": \"none\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/schedules", "description": "Membuat sesi untuk tes presensi. Tanggal dibuat H-1 agar juga dapat diproses scheduler pengingat. Presensi tetap dapat dicatat melalui endpoint sesi."},
+          "event": [{"listen": "prerequest", "script": {"type": "text/javascript", "exec": ["const start = new Date();", "start.setDate(start.getDate() + 1);", "start.setHours(10, 0, 0, 0);", "const end = new Date(start.getTime() + 60 * 60 * 1000);", "pm.collectionVariables.set('scheduleStartAt', start.toISOString());", "pm.collectionVariables.set('scheduleEndAt', end.toISOString());"]}}, {"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Jadwal dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('scheduleId', data._id);"]}}]
+        },
+        {
+          "name": "Ambil sesi test → sessionId",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/sessions?studentId={{studentId}}&scheduleId={{scheduleId}}&page=1&limit=10"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || {};", "const item = (data.items || [])[0];", "pm.test('Ada sesi test', function () { pm.expect(item && item._id, 'Jalankan pembuatan jadwal terlebih dahulu').to.be.ok; });", "if (item) pm.collectionVariables.set('sessionId', item._id);"]}}]
+        },
+        {
+          "name": "Ajukan perubahan jadwal dari Orang Tua → notif Guru",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{parentAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"sessionId\": \"{{sessionId}}\",\n  \"startAt\": \"{{rescheduleStartAt}}\",\n  \"endAt\": \"{{rescheduleEndAt}}\",\n  \"reason\": \"Permohonan penyesuaian waktu belajar.\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/portal/reschedule-requests", "description": "Gunakan saat aplikasi di HP sedang login sebagai Guru. Request ini memakai token Orang Tua dan membuat notifikasi perubahan jadwal ke Guru yang terkait dengan sesi."},
+          "event": [{"listen": "prerequest", "script": {"type": "text/javascript", "exec": ["const start = new Date();", "start.setDate(start.getDate() + 2);", "start.setHours(14, 0, 0, 0);", "const end = new Date(start.getTime() + 60 * 60 * 1000);", "pm.collectionVariables.set('rescheduleStartAt', start.toISOString());", "pm.collectionVariables.set('rescheduleEndAt', end.toISOString());"]}}, {"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Permintaan perubahan jadwal dibuat', function () { pm.expect(pm.response.code).to.equal(201); });"]}}]
+        },
+        {
+          "name": "Catat presensi Hadir → notif Orang Tua",
+          "request": {"method": "PATCH", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"attendance\": \"present\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/sessions/{{sessionId}}/attendance", "description": "Membuat event Kehadiran anak tercatat hanya untuk Orang Tua yang terhubung dengan siswa tersebut."},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Presensi tersimpan', function () { pm.expect(pm.response.code).to.equal(200); });"]}}]
+        },
+        {
+          "name": "Buat rencana + target → notif Orang Tua dan Siswa",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"studentId\": \"{{studentId}}\",\n  \"subjectId\": \"{{subjectId}}\",\n  \"title\": \"Rencana belajar notifikasi {{scenarioSuffix}}\",\n  \"startAt\": \"{{planStartAt}}\",\n  \"endAt\": \"{{planEndAt}}\",\n  \"targets\": [\n    {\n      \"title\": \"Target yang perlu diselesaikan {{scenarioSuffix}}\",\n      \"description\": \"Target untuk menguji notifikasi target baru dan pengingat H-1\",\n      \"successCriteria\": \"Siswa menyelesaikan latihan\",\n      \"priority\": \"normal\"\n    }\n  ]\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/learning-plans", "description": "Target baru menghasilkan notifikasi ke Orang Tua dan Siswa sesuai relasi siswa."},
+          "event": [{"listen": "prerequest", "script": {"type": "text/javascript", "exec": ["const now = new Date();", "const end = new Date();", "end.setDate(end.getDate() + 1);", "end.setHours(23, 59, 0, 0);", "pm.collectionVariables.set('scenarioSuffix', String(Date.now()));", "pm.collectionVariables.set('planStartAt', now.toISOString());", "pm.collectionVariables.set('planEndAt', end.toISOString());"]}}, {"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Rencana dan target dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('planId', data._id);", "if (data.targets && data.targets[0]) { pm.collectionVariables.set('targetId', data.targets[0]._id); pm.collectionVariables.set('targetVersion', String(data.targets[0].version || 0)); }"]}}]
+        },
+        {
+          "name": "Update progress shared → notif Orang Tua dan Siswa",
+          "request": {"method": "PATCH", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"progress\": 50,\n  \"version\": {{targetVersion}},\n  \"note\": \"Progress diperbarui saat pengujian notifikasi\",\n  \"visibility\": \"shared\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/targets/{{targetId}}/progress", "description": "Visibility shared membuat event progress untuk Siswa dan Orang Tua."},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Progress tersimpan', function () { pm.expect(pm.response.code).to.equal(200); });", "if (data.version !== undefined) pm.collectionVariables.set('targetVersion', String(data.version));"]}}]
+        },
+        {
+          "name": "Buat draft laporan shared",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"topic\": \"Laporan sesi notifikasi {{scenarioSuffix}}\",\n  \"summary\": \"Siswa mengikuti sesi dan menerima arahan belajar.\",\n  \"targetIds\": [\"{{targetId}}\"],\n  \"observations\": \"Partisipasi baik.\",\n  \"recommendation\": \"Lanjutkan latihan secara bertahap.\",\n  \"visibility\": \"shared\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/sessions/{{sessionId}}/reports", "description": "Laporan shared dapat dibaca Orang Tua dan Siswa setelah dipublish."},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || pm.response.json();", "pm.test('Draft laporan dibuat', function () { pm.expect(pm.response.code).to.equal(201); });", "pm.collectionVariables.set('reportId', data._id);"]}}]
+        },
+        {
+          "name": "Publish laporan → notif Orang Tua dan Siswa",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/sessions/{{sessionId}}/reports/{{reportId}}/publish", "description": "Membuat notifikasi laporan baru setelah status laporan menjadi published."},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Laporan dipublish', function () { pm.expect(pm.response.code).to.equal(201); });"]}}]
+        }
+      ]
+    },
+    {
+      "name": "4 - Inbox Notifikasi",
+      "item": [
+        {
+          "name": "Inbox Guru",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/notifications?page=1&limit=30"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || {};", "const item = (data.items || [])[0];", "pm.test('Inbox Guru berhasil dibaca', function () { pm.expect(pm.response.code).to.equal(200); });", "if (item) pm.collectionVariables.set('notificationId', item._id);"]}}]
+        },
+        {
+          "name": "Inbox Orang Tua",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{parentAccessToken}}"}], "url": "{{baseUrl}}/portal/notifications?page=1&limit=30"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || {};", "const item = (data.items || [])[0];", "pm.test('Inbox Orang Tua berhasil dibaca', function () { pm.expect(pm.response.code).to.equal(200); });", "if (item) pm.collectionVariables.set('parentNotificationId', item._id);"]}}]
+        },
+        {
+          "name": "Inbox Siswa",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{studentAccessToken}}"}], "url": "{{baseUrl}}/portal/student/notifications?page=1&limit=30"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["const data = pm.response.json().data || {};", "const item = (data.items || [])[0];", "pm.test('Inbox Siswa berhasil dibaca', function () { pm.expect(pm.response.code).to.equal(200); });", "if (item) pm.collectionVariables.set('studentNotificationId', item._id);"]}}]
+        },
+        {
+          "name": "Tandai notifikasi Guru terbaca",
+          "request": {"method": "PATCH", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/notifications/{{notificationId}}/read"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Notifikasi Guru ditandai terbaca', function () { pm.expect(pm.response.code).to.equal(200); });"]}}]
+        },
+        {
+          "name": "Tandai notifikasi Orang Tua terbaca",
+          "request": {"method": "PATCH", "header": [{"key": "Authorization", "value": "Bearer {{parentAccessToken}}"}], "url": "{{baseUrl}}/portal/notifications/{{parentNotificationId}}/read"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Notifikasi Orang Tua ditandai terbaca', function () { pm.expect(pm.response.code).to.equal(200); });"]}}]
+        },
+        {
+          "name": "Tandai notifikasi Siswa terbaca",
+          "request": {"method": "PATCH", "header": [{"key": "Authorization", "value": "Bearer {{studentAccessToken}}"}], "url": "{{baseUrl}}/portal/student/notifications/{{studentNotificationId}}/read"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Notifikasi Siswa ditandai terbaca', function () { pm.expect(pm.response.code).to.equal(200); });"]}}]
+        },
+        {
+          "name": "Tandai semua notifikasi Guru",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/notifications/read-all"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Semua notifikasi Guru ditandai terbaca', function () { pm.expect(pm.response.code).to.equal(200); });"]}}]
+        },
+        {
+          "name": "Tandai semua notifikasi Orang Tua",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{parentAccessToken}}"}], "url": "{{baseUrl}}/portal/notifications/read-all"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Semua notifikasi Orang Tua ditandai terbaca', function () { pm.expect(pm.response.code).to.equal(200); });"]}}]
+        },
+        {
+          "name": "Tandai semua notifikasi Siswa",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{studentAccessToken}}"}], "url": "{{baseUrl}}/portal/student/notifications/read-all"},
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('Semua notifikasi Siswa ditandai terbaca', function () { pm.expect(pm.response.code).to.equal(200); });"]}}]
+        },
+        {
+          "name": "Retry delivery Guru (jika pending/failed)",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/notifications/{{notificationId}}/retry", "description": "Jalankan jika notificationId memiliki deliveryStatus pending atau failed. Retry dibatasi rate limit dan backoff backend."}
+        }
+      ]
+    },
+    {
+      "name": "5 - Device Push FCM",
+      "item": [
+        {
+          "name": "Register device FCM Guru",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{teacherDeviceToken}}\",\n  \"platform\": \"android\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/notifications/devices", "description": "Ganti token contoh dengan token Firebase Cloud Messaging dari aplikasi Guru."}
+        },
+        {
+          "name": "Register device FCM Orang Tua",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{parentAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{parentDeviceToken}}\",\n  \"platform\": \"android\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/portal/notifications/devices", "description": "Registrasi device portal Orang Tua. Untuk push foreground/background, token harus token FCM nyata."}
+        },
+        {
+          "name": "Register device FCM Siswa",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{studentAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{studentDeviceToken}}\",\n  \"platform\": \"android\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/portal/student/notifications/devices", "description": "Registrasi device portal Siswa."}
+        },
+        {
+          "name": "Unregister device FCM Guru",
+          "request": {"method": "DELETE", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{teacherDeviceToken}}\",\n  \"platform\": \"android\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/notifications/devices"}
+        },
+        {
+          "name": "Unregister device FCM Orang Tua",
+          "request": {"method": "DELETE", "header": [{"key": "Authorization", "value": "Bearer {{parentAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{parentDeviceToken}}\",\n  \"platform\": \"android\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/portal/notifications/devices"}
+        },
+        {
+          "name": "Unregister device FCM Siswa",
+          "request": {"method": "DELETE", "header": [{"key": "Authorization", "value": "Bearer {{studentAccessToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"token\": \"{{studentDeviceToken}}\",\n  \"platform\": \"android\"\n}", "options": {"raw": {"language": "json"}}}, "url": "{{baseUrl}}/portal/student/notifications/devices"}
+        }
+      ]
+    },
+    {
+      "name": "6 - Scheduler H-1",
+      "item": [
+        {
+          "name": "Cek inbox Guru setelah scheduler tick",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{teacherAccessToken}}"}], "url": "{{baseUrl}}/notifications?page=1&limit=100", "description": "Jalankan setelah interval NotificationScheduler terlewati. Harapkan event target-due dan/atau lesson-reminder jika data test jatuh pada jendela besok dan entitlement mengizinkan."}
+        },
+        {
+          "name": "Cek inbox Orang Tua setelah scheduler tick",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{parentAccessToken}}"}], "url": "{{baseUrl}}/portal/notifications?page=1&limit=100", "description": "Target jatuh tempo dan pengingat jadwal hanya dikirim ke Orang Tua yang terhubung dengan siswa terkait."}
+        },
+        {
+          "name": "Cek inbox Siswa setelah scheduler tick",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{studentAccessToken}}"}], "url": "{{baseUrl}}/portal/student/notifications?page=1&limit=100", "description": "Siswa menerima pengingat target dan jadwal untuk dirinya sendiri, bukan siswa lain dalam keluarga."}
+        }
+      ]
+    }
+  ]
+}

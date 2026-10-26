@@ -12,7 +12,7 @@ import { PasswordResetOtpService } from './password-reset-otp.service';
 import { ResendMailService } from './resend-mail.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
-export const safeUser = (user: User) => ({_id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role, workspaceId: user.workspaceId, timezone: user.timezone});
+export const safeUser = (user: User) => ({_id: user._id, name: user.name, email: user.email, phone: user.phone, avatarId: user.avatarId ?? null, role: user.role, workspaceId: user.workspaceId, timezone: user.timezone});
 @Injectable()
 export class AuthService {
   constructor(private readonly db: Database, private readonly firebase: FirebaseAuthService, private readonly passwordResetOtp: PasswordResetOtpService, private readonly resendMail: ResendMailService, private readonly subscriptions: SubscriptionsService) {}
