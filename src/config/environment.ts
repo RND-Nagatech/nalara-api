@@ -9,6 +9,10 @@ export function validateEnvironment(input: Record<string, unknown>) {
   if (!Number.isInteger(Number(env.PORT)) || Number(env.PORT) < 1 || Number(env.PORT) > 65535) throw new Error('PORT tidak valid');
   const redisPort = Number(env.REDIS_PORT ?? 6379);
   if (!Number.isInteger(redisPort) || redisPort < 1 || redisPort > 65535) throw new Error('REDIS_PORT tidak valid');
+  const redisUsername = typeof env.REDIS_USERNAME === 'string' ? env.REDIS_USERNAME.trim() : '';
+  const redisPassword = typeof env.REDIS_PASSWORD === 'string' ? env.REDIS_PASSWORD : '';
+  const redisTls = env.REDIS_TLS === undefined ? false : String(env.REDIS_TLS) === 'true';
+  if (env.REDIS_TLS !== undefined && !['true', 'false'].includes(String(env.REDIS_TLS))) throw new Error('REDIS_TLS tidak valid');
   const otpTtlMinutes = Number(env.PASSWORD_RESET_OTP_TTL_MINUTES ?? 5);
   if (!Number.isInteger(otpTtlMinutes) || otpTtlMinutes < 1 || otpTtlMinutes > 60) throw new Error('PASSWORD_RESET_OTP_TTL_MINUTES harus berupa bilangan bulat 1 sampai 60');
   if (!env.CORS_ORIGINS) throw new Error('CORS_ORIGINS wajib diisi');
@@ -46,5 +50,5 @@ export function validateEnvironment(input: Record<string, unknown>) {
     if(!['sandbox','production'].includes(String(env.SINGAPAY_ENVIRONMENT ?? 'sandbox'))) throw new Error('SINGAPAY_ENVIRONMENT tidak valid');
     for(const key of ['SINGAPAY_CLIENT_ID','SINGAPAY_CLIENT_SECRET','SINGAPAY_API_KEY','SINGAPAY_ACCOUNT_ID']) if(!String(env[key] ?? '').trim()) throw new Error(`${key} wajib diisi ketika SingaPay diaktifkan`);
   }
-  return {...env, CORS_ORIGINS: origins.join(','), SWAGGER_ENABLED: swaggerEnabled, REDIS_HOST: String(env.REDIS_HOST ?? '127.0.0.1'), REDIS_PORT: redisPort, PASSWORD_RESET_OTP_TTL_MINUTES: otpTtlMinutes, NOTIFICATION_SCHEDULER_INTERVAL_MINUTES: notificationIntervalMinutes, RESEND_API_KEY: resendApiKey, RESEND_FROM_EMAIL: resendFromEmail, RESEND_TEST_RECIPIENT: resendTestRecipient};
+  return {...env, CORS_ORIGINS: origins.join(','), SWAGGER_ENABLED: swaggerEnabled, REDIS_HOST: String(env.REDIS_HOST ?? '127.0.0.1'), REDIS_PORT: redisPort, REDIS_USERNAME: redisUsername, REDIS_PASSWORD: redisPassword, REDIS_TLS: redisTls, PASSWORD_RESET_OTP_TTL_MINUTES: otpTtlMinutes, NOTIFICATION_SCHEDULER_INTERVAL_MINUTES: notificationIntervalMinutes, RESEND_API_KEY: resendApiKey, RESEND_FROM_EMAIL: resendFromEmail, RESEND_TEST_RECIPIENT: resendTestRecipient};
 }

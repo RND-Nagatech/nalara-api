@@ -39,6 +39,9 @@ export class MeController { @Get() me(@Actor() actor: Principal) { return actor;
         const redis = new Redis({
           host: config.get('REDIS_HOST', '127.0.0.1'),
           port: Number(config.get('REDIS_PORT', 6379)),
+          username: String(config.get('REDIS_USERNAME', '') || '') || undefined,
+          password: String(config.get('REDIS_PASSWORD', '') || '') || undefined,
+          tls: config.get('REDIS_TLS', false) === true ? {} : undefined,
           connectTimeout: 5_000,
           commandTimeout: 5_000,
           lazyConnect: false,

@@ -1,5 +1,9 @@
 # NALARA API
 
+## Identitas client Android
+
+Client Android beralih ke `id.giapp.nalara`; iOS tetap `id.nalara.nalara`. Endpoint, token/session dan scope backend tidak berubah. Android Firebase baru harus didaftarkan pada project yang sama (`nalara-749db`) sebelum memakai config Android baru, agar tetap sesuai project Firebase Admin backend; jangan mengganti credential Admin atau project backend untuk sekadar rename package. Registrasi/config Android baru belum tersedia pada pemeriksaan read-only 26 Oktober 2026. [Prasyarat aplikasi](../flutter-apk/README.md#rilis-android-ke-google-play).
+
 ## Alasan pembatalan sesi
 
 Guru wajib mengirim `cancellationReason` (string trimmed 3–500 karakter) saat membatalkan sesi/seri, termasuk jalur presensi cancelled legacy. Validasi DTO dan service menolak alasan kosong/tidak valid atau reason-only edit sebelum menulis. Field optional baru disimpan pada schedule/session agar data batal lama tetap kompatibel; tidak ada migrasi/backfill, dependency atau env baru.
@@ -153,6 +157,9 @@ Target distribusi adalah Google Play dan App Store. Integrasi pembelian store, o
    CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
    REDIS_HOST=127.0.0.1
    REDIS_PORT=6379
+   REDIS_USERNAME=
+   REDIS_PASSWORD=
+   REDIS_TLS=false
    ```
 
    Isi `RESEND_API_KEY` dan `RESEND_FROM_EMAIL` jika ingin menguji pengiriman OTP sungguhan. Untuk development, `RESEND_TEST_RECIPIENT` dapat diarahkan ke email pengujian.
@@ -254,7 +261,7 @@ Environment wajib: `MONGODB_URI`, `CORS_ORIGINS` eksplisit, dan `PORT` valid. `.
 | Runtime | `NODE_ENV`, `PORT`, `LOG_LEVEL` | `development`, `test`, atau `production`; port default `3100` |
 | Database | `MONGODB_URI` | Wajib MongoDB URI; development memakai replica set `rs0` |
 | CORS | `CORS_ORIGINS` | Daftar origin HTTPS/HTTP lokal dipisahkan koma; wildcard tidak boleh |
-| Redis | `REDIS_HOST`, `REDIS_PORT` | Default `127.0.0.1:6379`; wajib untuk reset password |
+| Redis | `REDIS_HOST`, `REDIS_PORT`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_TLS` | Default `127.0.0.1:6379`; username/password opsional untuk Redis managed; `REDIS_TLS=true` jika provider mewajibkan TLS; wajib untuk reset password |
 | OTP | `PASSWORD_RESET_OTP_TTL_MINUTES` | TTL OTP 1–60 menit, default 5 |
 | Email | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TEST_RECIPIENT` | API key/from wajib production; recipient test hanya non-production |
 | Firebase | `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` atau `GOOGLE_APPLICATION_CREDENTIALS` | Verifikasi Google dan FCM; credential hanya di environment backend |
