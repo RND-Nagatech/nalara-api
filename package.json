@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
+    "test:startup": "node --test test/startup-logging.check.cjs test/hardening-config.check.cjs",
     "test:subscriptions": "node --test test/subscriptions.check.cjs test/checkout-recovery.check.cjs",
     "test:hardening": "node --test test/otp-hardening.check.cjs test/notification-audience.check.cjs test/notification-delivery.check.cjs test/notification-revocation.check.cjs test/notification-inbox.check.cjs test/notification-scheduler.check.cjs test/background-workers.check.cjs test/hardening-config.check.cjs",
     "test:teaching-guide": "node --test test/teaching-guide.check.cjs",
@@ -23,9 +24,9 @@
     "test:assignment-batch": "node --test test/assignment-batch.check.cjs",
     "test:report-batch": "node --test test/report-batch.check.cjs",
     "test:otp:redis": "node --test test/otp-redis.integration.check.cjs",
-    "verify:source": "npm run typecheck && npm run lint && npm run test:hardening && npm run test:subscriptions && npm run test:teaching-guide && npm run test:account-deletion && npm run test:branding && npm run test:avatars && npm run test:referrals && npm run test:schedule-groups && npm run test:student-groups && npm run test:tuition-fees && npm run test:teacher-profile && npm run test:schedule-repeat && npm run test:assignment-batch && npm run test:report-batch",
+    "verify:source": "npm run typecheck && npm run lint && npm run test:startup && npm run test:hardening && npm run test:subscriptions && npm run test:teaching-guide && npm run test:account-deletion && npm run test:branding && npm run test:avatars && npm run test:referrals && npm run test:schedule-groups && npm run test:student-groups && npm run test:tuition-fees && npm run test:teacher-profile && npm run test:schedule-repeat && npm run test:assignment-batch && npm run test:report-batch",
     "start": "node dist/main.js",
-    "start:dev": "npm run build && node --watch dist/main.js",
+    "start:dev": "nest start --watch --preserveWatchOutput",
     "lint": "oxlint src test",
     "test": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand",
     "test:e2e": "npm run build && node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testPathPatterns=e2e",
@@ -58,6 +59,7 @@
     "sharp": "^0.35.5"
   },
   "devDependencies": {
+    "@nestjs/cli": "12.0.8",
     "@types/express": "5.0.6",
     "@types/node": "24.10.1",
     "@types/pdfkit": "^0.17.3",

@@ -3,6 +3,14 @@ const assert = require('node:assert/strict');
 const {source} = require('./helpers/source.cjs');
 const {validateEnvironment} = source('config/environment.ts');
 const base = {MONGODB_URI: 'mongodb://127.0.0.1/unused', CORS_ORIGINS: 'http://localhost:8080'};
+test('Swagger stays enabled for development and disabled by default for production', () => {
+  const production = {NODE_ENV: 'production', RESEND_API_KEY: 'test-key', RESEND_FROM_EMAIL: 'no-reply@example.test'};
+  assert.equal(validateEnvironment(base).SWAGGER_ENABLED, true);
+  assert.equal(validateEnvironment({...base, ...production}).SWAGGER_ENABLED, false);
+  assert.equal(validateEnvironment({...base, SWAGGER_ENABLED: 'true'}).SWAGGER_ENABLED, true);
+  assert.equal(validateEnvironment({...base, SWAGGER_ENABLED: 'false'}).SWAGGER_ENABLED, false);
+  assert.throws(() => validateEnvironment({...base, SWAGGER_ENABLED: 'yes'}), /SWAGGER_ENABLED/);
+});
 test('worker defaults are bounded and can be configured without changing API contracts', () => {
   const config = validateEnvironment(base);
   assert.equal(config.NOTIFICATION_DELIVERY_INTERVAL_SECONDS, 15); assert.equal(config.NOTIFICATION_DELIVERY_BATCH_SIZE, 25);

@@ -1,4 +1,4 @@
-import { Global, Injectable, Module, OnModuleInit } from '@nestjs/common';
+import { Global, Injectable, Logger, Module, OnModuleInit } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import mongoose, { Connection, Model, Schema } from 'mongoose';
 import { Collections } from './entities';
@@ -19,16 +19,41 @@ import { accountDeletionSchemas } from '../modules/account-deletion/account-dele
 import { studentGroupsSchemas } from '../modules/student-groups/student-groups.schemas';
 import { tuitionFeesSchemas } from '../modules/tuition-fees/tuition-fees.schemas';
 const schemas:Record<keyof Collections,Schema>={...authSchemas,...studentsSchemas,...studentGroupsSchemas,...tuitionFeesSchemas,...subjectsSchemas,...schedulesSchemas,...learningSchemas,...reportsSchemas,...invitationsSchemas,...notificationsSchemas,...parentPortalSchemas,...auditSchemas,...familiesSchemas,...subscriptionSchemas,...tutorToolsSchemas,...accountDeletionSchemas};
+const INDEX_INIT_TIMEOUT_MS = 30_000;
 
 @Injectable()
 export class Database implements OnModuleInit {
+  private readonly logger = new Logger(Database.name);
   private readonly models = new Map<keyof Collections, Model<unknown>>();
   constructor(@InjectConnection() readonly connection: Connection) {
     mongoose.set('maxTimeMS', 10000);
     for (const name of Object.keys(schemas) as (keyof Collections)[]) this.models.set(name, connection.model(name, schemas[name]) as unknown as Model<unknown>);
   }
   collection<K extends keyof Collections>(name: K): Model<Collections[K]> { return this.models.get(name)! as Model<Collections[K]>; }
-  async onModuleInit() { for (const model of this.models.values()) await model.init(); }
+  async onModuleInit() {
+    const entries = [...this.models.entries()];
+    this.logger.log(`Initializing MongoDB indexes for ${entries.length} models...`);
+
+    await Promise.all(entries.map(async ([name, model]) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          model.init(),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error(`index initialization timed out after ${INDEX_INIT_TIMEOUT_MS}ms`)), INDEX_INIT_TIMEOUT_MS);
+          }),
+        ]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`MongoDB indexes failed for ${String(name)}: ${message}`);
+        throw error;
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }));
+
+    this.logger.log(`MongoDB indexes ready for ${entries.length} models.`);
+  }
 }
 @Global()
 @Module({providers: [Database], exports: [Database]})

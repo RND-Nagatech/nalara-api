@@ -1,5 +1,15 @@
 # NALARA API
 
+## Log development dan compile watch
+
+`npm run start:dev` memakai Nest CLI 12.0.8 (`nest start --watch --preserveWatchOutput`), sama dengan alur Invoice Kilat. Terminal menampilkan `Starting compilation in watch mode`, hasil kompilasi, inisialisasi modul, `RoutesResolver`/`RouterExplorer`, `Nest application successfully started`, lalu `API listening on port 3100` setelah `listen()` berhasil. Perubahan pada `src/**/*.ts` dikompilasi ulang dan proses API dimuat ulang otomatis; tidak perlu build dari terminal kedua. Output sebelumnya tetap terlihat.
+
+Pada `NODE_ENV=development`, log aplikasi/lifecycle menggunakan ConsoleLogger Nest dengan timestamp dan warna. Log request serta filter error tetap memakai Pino dengan request ID/redaction; `.env` lokal menggunakan `LOG_LEVEL=info` agar request sukses terlihat. `LOG_LEVEL=warn` menyaring pesan info Pino dan sebelumnya membuat startup terlihat berhenti setelah InstanceLoader, meskipun API telah listening. Production tetap menggunakan Pino terstruktur sesuai `LOG_LEVEL`.
+
+Swagger tetap aktif untuk development (`SWAGGER_ENABLED=true`), tersedia di `/api/docs` dan `/api/docs-json`, serta didaftarkan sebelum listener/handler 404. Default production tetap nonaktif. URL API dan liveness ditampilkan setelah listener siap. Jika baru menarik perubahan ini, jalankan `npm ci` untuk memasang CLI, hentikan proses development lama dengan Ctrl+C, lalu jalankan `npm run start:dev` lagi. `npm start` tetap menjalankan hasil `dist` untuk deployment.
+
+`npm run test:startup` memeriksa format/visibilitas logger, pemilihan Pino production, serta konfigurasi Swagger memakai fake application tanpa bootstrap Nest, listener, build atau koneksi provider. [Hasil verifikasi](../docs/VERIFICATION.md#log-development-backend--27-oktober-2026).
+
 ## Identitas client Android
 
 Client Android beralih ke `id.giapp.nalara`; iOS tetap `id.nalara.nalara`. Endpoint, token/session dan scope backend tidak berubah. Android Firebase baru harus didaftarkan pada project yang sama (`nalara-749db`) sebelum memakai config Android baru, agar tetap sesuai project Firebase Admin backend; jangan mengganti credential Admin atau project backend untuk sekadar rename package. Registrasi/config Android baru belum tersedia pada pemeriksaan read-only 26 Oktober 2026. [Prasyarat aplikasi](../flutter-apk/README.md#rilis-android-ke-google-play).
@@ -252,7 +262,7 @@ npm run build
 npm start
 ```
 
-Perintah di atas adalah versi singkat jika MongoDB dan Redis sudah berjalan. `npm run start:dev` melakukan build lalu memantau hasil `dist`; setelah edit TypeScript, jalankan `npm run build` pada terminal lain. Tidak ada upgrade major otomatis.
+Perintah di atas adalah versi singkat jika MongoDB dan Redis sudah berjalan. `npm run start:dev` memakai Nest CLI watch untuk mengompilasi dan memuat ulang perubahan TypeScript otomatis; tidak perlu menjalankan build di terminal kedua. Tidak ada upgrade major otomatis.
 
 Environment wajib: `MONGODB_URI`, `CORS_ORIGINS` eksplisit, dan `PORT` valid. `.env` diabaikan Git. Default lokal adalah API `3100`, MongoDB replica set `rs0` pada port `27018`, dan Redis pada port `6379`. URI host memakai `directConnection=true`; API container memakai URI internal `mongo:27017` dan `redis:6379` yang dioverride oleh Compose. Redis harus hidup sebelum request OTP dikirim. Jika Redis unavailable, endpoint reset password mengembalikan `503 UNAVAILABLE`, bukan `500`.
 
@@ -318,7 +328,7 @@ Setiap module domain umumnya memiliki `*.module.ts`, DTO, schema Mongoose, servi
 - Tanggal disimpan sebagai UTC `Date`; timezone dipakai untuk perhitungan hari dan jadwal lokal.
 - Transaksi MongoDB dipakai untuk operasi multi-collection yang harus atomik. Karena itu MongoDB harus berjalan sebagai replica set.
 - Schema memakai `strict: 'throw'`; field tambahan pada payload ditolak oleh validation pipe.
-- Index dibuat/diinisialisasi ketika module database startup melalui `model.init()`; repository ini belum memakai file migration terpisah.
+- Index dibuat/diinisialisasi ketika module database startup melalui `model.init()` secara paralel. Startup menunggu seluruh index selesai, dengan timeout 30 detik per model; jika ada index yang gagal atau macet, API tidak dibuka dan nama model dicetak di log agar masalah MongoDB bisa diperbaiki sebelum menerima request. Repository ini belum memakai file migration terpisah.
 
 ### Relasi inti
 
@@ -459,7 +469,7 @@ npm audit --omit=dev
 
 `npm test` membutuhkan replica set lokal di port 27018 untuk E2E. Tes membuat database sementara tersendiri dan membersihkannya setelah selesai. Jest menjalankan hasil kompilasi dengan VM modules untuk dependency Nest 12 yang ESM. Peringatan VM modules dari Node adalah expected; kegagalan tes tetap menghasilkan exit nonzero.
 
-Seed tidak dijalankan di production dan tidak menimpa workspace yang berisi siswa. Seed password tidak dicatat pada log. Library Pino meredaksi authorization, cookies, dan request body; log server menggunakan JSON dan request ID.
+Seed tidak dijalankan di production dan tidak menimpa workspace yang berisi siswa. Seed password tidak dicatat pada log. Library Pino meredaksi authorization, cookies, dan request body; log request menyertakan request ID. Development menampilkan lifecycle dalam format Nest dan request Pino yang mudah dibaca; production menggunakan JSON.
 
 `SEED_PHONE` diperlukan hanya saat seed membuat akun baru. Rerun terhadap akun lama tidak menambahkan/mengganti nomor HP akun tersebut. Jangan menjalankan backend, seed, tes, atau build tanpa permintaan eksplisit pengguna; perintah di atas adalah referensi manual, bukan instruksi untuk dieksekusi otomatis.
 
