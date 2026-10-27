@@ -36,18 +36,23 @@ export class MeController { @Get() me(@Actor() actor: Principal) { return actor;
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const logger = new Logger('AuthRedis');
-        const redis = new Redis({
-          host: config.get('REDIS_HOST', '127.0.0.1'),
-          port: Number(config.get('REDIS_PORT', 6379)),
-          username: String(config.get('REDIS_USERNAME', '') || '') || undefined,
-          password: String(config.get('REDIS_PASSWORD', '') || '') || undefined,
-          tls: config.get('REDIS_TLS', false) === true ? {} : undefined,
+        const connectionOptions = {
           connectTimeout: 5_000,
           commandTimeout: 5_000,
           lazyConnect: false,
           enableOfflineQueue: true,
           maxRetriesPerRequest: 1,
-          retryStrategy: attempt => Math.min(250 * 2 ** Math.min(attempt - 1, 4), 5_000),
+          retryStrategy: (attempt: number) => Math.min(250 * 2 ** Math.min(attempt - 1, 4), 5_000),
+        };
+        const redisUrl = String(config.get('REDIS_URL', '') || '').trim();
+        const redis = redisUrl
+          ? new Redis(redisUrl, connectionOptions)
+          : new Redis({
+          host: config.get('REDIS_HOST', '127.0.0.1'),
+          port: Number(config.get('REDIS_PORT', 6379)),
+          username: String(config.get('REDIS_USERNAME', '') || '') || undefined,
+          password: String(config.get('REDIS_PASSWORD', '') || '') || undefined,
+          ...connectionOptions,
         });
         redis.on('ready', () => logger.log('Redis ready'));
         redis.on('error', error => logger.warn(`Redis unavailable: ${error.message}`));
