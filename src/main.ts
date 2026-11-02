@@ -43,7 +43,7 @@ export async function createApplication() {
   const server = app.getHttpServer(); server.requestTimeout = 30000; server.headersTimeout = 35000;
   return app;
 }
-async function bootstrap() {
+export async function bootstrap() {
   NestLogger.log('Starting NALARA API...', 'Bootstrap');
   NestLogger.log('Initializing modules and external dependencies...', 'Bootstrap');
 
@@ -54,11 +54,14 @@ async function bootstrap() {
     const config = app.get(ConfigService);
     const port = config.getOrThrow<number>('PORT');
     await app.listen(port, '0.0.0.0');
-    NestLogger.log(`API listening on port ${port}`, 'Bootstrap');
-    NestLogger.log(`API base URL: http://localhost:${port}/api/v1`, 'Bootstrap');
-    NestLogger.log(`Health check: http://localhost:${port}/api/v1/health/live`, 'Bootstrap');
+    // The readiness banner is an explicit startup confirmation, independent of
+    // request/application LOG_LEVEL. Never print it before listen() succeeds.
+    const readinessLogger = new ConsoleLogger('Bootstrap', {timestamp: true, logLevels: ['log']});
+    readinessLogger.log(`API listening on port ${port}`);
+    readinessLogger.log(`API base URL: http://localhost:${port}/api/v1`);
+    readinessLogger.log(`Health check: http://localhost:${port}/api/v1/health/live`);
     if (config.get<boolean>('SWAGGER_ENABLED')) {
-      NestLogger.log(`Swagger docs: http://localhost:${port}/api/docs`, 'Bootstrap');
+      readinessLogger.log(`Swagger docs: http://localhost:${port}/api/docs`);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

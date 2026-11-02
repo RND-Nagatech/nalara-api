@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { hash, verify, argon2id } from 'argon2';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { ClientSession } from 'mongoose';
@@ -128,9 +128,11 @@ export class AuthService {
   async forgot(dto: ForgotDto) {
     const email = dto.email.toLowerCase().trim();
     const user = await this.db.collection('users').findOne({email, deletionRequestedAt: {$exists: false}}).lean();
-    const challenge = await this.passwordResetOtp.issue(email, user?._id);
-    if (user && challenge.otp) await this.resendMail.sendPasswordResetOtp(user.email, challenge.otp, challenge.expiresInSeconds);
-    return {accepted: true, otpExpiresInSeconds: this.passwordResetOtp.expiresInSeconds};
+    if (!user) throw new NotFoundException({code: 'EMAIL_NOT_REGISTERED', message: 'Maaf, email belum terdaftar.'});
+    const challenge = await this.passwordResetOtp.issue(email, user._id);
+    if (!challenge.otp) throw new ServiceUnavailableException('Kode OTP belum dapat dikirim. Silakan coba lagi.');
+    await this.resendMail.sendPasswordResetOtp(user.email, challenge.otp, challenge.expiresInSeconds);
+    return {accepted: true, otpExpiresInSeconds: challenge.expiresInSeconds};
   }
   async verifyResetOtp(dto: VerifyResetOtpDto) {
     const resetToken = await this.passwordResetOtp.verify(dto.email.toLowerCase().trim(), dto.otp);

@@ -42,7 +42,7 @@ export class GoogleLoginDto {
   @IsString() @MinLength(100) @MaxLength(8192) idToken!: string;
 }
 export class ForgotDto {
-  @ApiProperty() @Transform(({value}) => typeof value === 'string' ? value.trim().toLowerCase() : value) @IsEmail({}) @MaxLength(254) email!: string;
+  @ApiProperty() @Transform(({value}) => typeof value === 'string' ? value.trim().toLowerCase() : value) @IsEmail({}, {message: 'Email tidak valid'}) @MaxLength(254, {message: 'Email maksimal 254 karakter'}) email!: string;
 }
 export class VerifyResetOtpDto {
   @ApiProperty() @Transform(({value}) => typeof value === 'string' ? value.trim().toLowerCase() : value) @IsEmail({}) @MaxLength(254) email!: string;

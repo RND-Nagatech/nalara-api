@@ -1,3 +1,5 @@
+import { isEmail } from 'class-validator';
+
 export function validateEnvironment(input: Record<string, unknown>) {
   const env: Record<string, unknown> = {NODE_ENV: 'development', PORT: '3100', LOG_LEVEL: 'info', ...input};
   if (!['development', 'test', 'production'].includes(String(env.NODE_ENV))) throw new Error('NODE_ENV tidak valid');
@@ -39,6 +41,10 @@ export function validateEnvironment(input: Record<string, unknown>) {
   if (env.NODE_ENV === 'production' && !resendApiKey) throw new Error('RESEND_API_KEY wajib diisi pada production');
   if (env.NODE_ENV === 'production' && !resendFromEmail) throw new Error('RESEND_FROM_EMAIL wajib diisi pada production');
   if (env.NODE_ENV === 'production' && resendTestRecipient) throw new Error('RESEND_TEST_RECIPIENT hanya boleh digunakan di luar production');
+  if (resendFromEmail && (/\r|\n/.test(resendFromEmail) || !isEmail(resendFromEmail, {allow_display_name: true}))) throw new Error('RESEND_FROM_EMAIL harus berupa alamat email valid, misalnya NALARA <no-reply@domain-anda.id>');
+  if (resendTestRecipient && !isEmail(resendTestRecipient)) throw new Error('RESEND_TEST_RECIPIENT harus berupa alamat email valid');
+  const resendFromAddress = resendFromEmail.match(/<([^<>]+)>$/)?.[1] ?? resendFromEmail;
+  if (env.NODE_ENV === 'production' && /@resend\.dev$/i.test(resendFromAddress)) throw new Error('RESEND_FROM_EMAIL production harus memakai domain sendiri yang sudah diverifikasi di Resend');
   if (env.NOTIFICATION_DELIVERY_URL && !String(env.NOTIFICATION_DELIVERY_URL).startsWith('https://')) throw new Error('NOTIFICATION_DELIVERY_URL harus HTTPS');
   const notificationIntervalMinutes = Number(env.NOTIFICATION_SCHEDULER_INTERVAL_MINUTES ?? 15);
   if (!Number.isInteger(notificationIntervalMinutes) || notificationIntervalMinutes < 5 || notificationIntervalMinutes > 60) throw new Error('NOTIFICATION_SCHEDULER_INTERVAL_MINUTES harus berupa bilangan bulat 5 sampai 60');

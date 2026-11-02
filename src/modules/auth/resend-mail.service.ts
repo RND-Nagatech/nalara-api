@@ -9,8 +9,8 @@ export class ResendMailService {
   constructor(private readonly config: ConfigService) {}
 
   async sendPasswordResetOtp(to: string, otp: string, expiresInSeconds: number) {
-    const apiKey = this.config.get<string>('RESEND_API_KEY');
-    const from = this.config.get<string>('RESEND_FROM_EMAIL');
+    const apiKey = this.config.get<string>('RESEND_API_KEY')?.trim();
+    const from = this.config.get<string>('RESEND_FROM_EMAIL')?.trim();
     if (!apiKey || !from) throw new ServiceUnavailableException('Pengiriman email reset belum dikonfigurasi.');
     const recipient = this.config.get<string>('NODE_ENV') !== 'production'
       ? (this.config.get<string>('RESEND_TEST_RECIPIENT') || to)
@@ -30,9 +30,14 @@ export class ResendMailService {
         }),
         signal: AbortSignal.timeout(10_000),
       });
+      const payload = await response.json().catch(() => null) as {id?: unknown; name?: unknown} | null;
       if (!response.ok) {
-        const providerMessage = (await response.text()).slice(0, 500);
-        this.logger.warn(`Resend rejected password reset email (${response.status}): ${providerMessage}`);
+        const providerCode = typeof payload?.name === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(payload.name) ? payload.name : 'unknown_error';
+        this.logger.warn(`Resend rejected password reset email (status=${response.status}, code=${providerCode}).`);
+        throw new ServiceUnavailableException('Pengiriman email reset gagal. Coba lagi.');
+      }
+      if (typeof payload?.id !== 'string' || !payload.id.trim()) {
+        this.logger.warn('Resend returned no email ID for password reset.');
         throw new ServiceUnavailableException('Pengiriman email reset gagal. Coba lagi.');
       }
     } catch (error) {
