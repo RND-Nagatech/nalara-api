@@ -4,6 +4,8 @@ export const authSchemas = {
   users: schema({name: required, email: {...required, lowercase: true}, phone: {type: String, match: /^\+628[1-9]\d{7,10}$/}, passwordHash: {...required, select: false}, firebaseUid: {type: String}, role: {type: String, enum: ['teacher'], default: 'teacher'}, workspaceId: required, timezone: {type: String, default: 'Asia/Jakarta'}, teachingTutorialSeen: {type: Boolean, default: false}, deletionRequestedAt: Date, authVersion: {type: Number, default: 0}}),
   workspaces: schema({name: required, ownerId: required, scheduleVersion: {type: Number, default: 0}, deletionRequestedAt: Date}),
   authSessions: schema({userId: required, accessHash: required, refreshHash: required, accessExpiresAt: date, expiresAt: date}),
+  passwordResetChallenges: schema({userId: String, otpHash: String, attempts: {type: Number, default: 0, min: 0, max: 5}, otpExpiresAt: Date, cooldownUntil: date, expiresAt: date}),
+  passwordResetTokens: schema({userId: required, expiresAt: date}),
 };
 authSchemas.users.add({ avatarId: { type: String, enum: [...avatarOptions('teacher').map(entry => entry.avatarId), null], default: null } });
 authSchemas.users.index({email: 1}, {unique: true});
@@ -12,3 +14,7 @@ authSchemas.users.index({phone: 1}, {unique: true, partialFilterExpression: {pho
 authSchemas.authSessions.index({accessHash: 1}, {unique: true});
 authSchemas.authSessions.index({refreshHash: 1}, {unique: true});
 authSchemas.authSessions.index({expiresAt: 1}, {expireAfterSeconds: 0});
+authSchemas.passwordResetChallenges.index({expiresAt: 1}, {expireAfterSeconds: 0});
+authSchemas.passwordResetChallenges.index({userId: 1});
+authSchemas.passwordResetTokens.index({expiresAt: 1}, {expireAfterSeconds: 0});
+authSchemas.passwordResetTokens.index({userId: 1});

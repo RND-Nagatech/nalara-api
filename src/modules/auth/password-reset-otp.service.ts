@@ -1,97 +1,113 @@
-import { HttpException, HttpStatus, Inject, Injectable, Logger, OnModuleDestroy, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import type { ClientSession } from 'mongoose';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
+import { Database } from '../../database/database.module';
+import type { PasswordResetChallenge } from '../../database/entities';
 
-export const AUTH_REDIS = Symbol('AUTH_REDIS');
-
-type OtpRecord = {userId: string; otpHash: string; attempts: number};
-type ResetTokenRecord = {userId: string};
 export type IssuedPasswordResetOtp = {otp: string | null; expiresInSeconds: number};
-
+type VerificationResult = 'ok' | 'expired' | 'invalid' | 'locked' | 'mismatch';
+type StorageOperation = 'issue' | 'verify' | 'peek' | 'consume';
 const hashValue = (value: string) => createHash('sha256').update(value).digest('hex');
 
-// One Redis operation owns comparison, attempt accounting, OTP consumption and
-// reset-token issuance. A process-local lock cannot protect multiple API replicas.
-export const PASSWORD_RESET_VERIFY_SCRIPT = `
-local stored = redis.call('GET', KEYS[1])
-if not stored then return 'expired' end
-local ok, record = pcall(cjson.decode, stored)
-if not ok or type(record) ~= 'table' or type(record.userId) ~= 'string'
-  or record.userId == '' or type(record.otpHash) ~= 'string'
-  or type(record.attempts) ~= 'number' or record.attempts < 0
-  or record.attempts ~= math.floor(record.attempts) then
-  redis.call('DEL', KEYS[1])
-  return 'invalid'
-end
-if redis.call('PTTL', KEYS[1]) <= 0 then
-  redis.call('DEL', KEYS[1])
-  return 'expired'
-end
-if record.attempts >= 5 then
-  redis.call('DEL', KEYS[1])
-  return 'locked'
-end
-if record.otpHash ~= ARGV[1] then
-  record.attempts = record.attempts + 1
-  if record.attempts >= 5 then
-    redis.call('DEL', KEYS[1])
-    return 'locked'
-  end
-  redis.call('SET', KEYS[1], cjson.encode(record), 'KEEPTTL')
-  return 'mismatch'
-end
-local issued = redis.call('SET', KEYS[2], cjson.encode({userId = record.userId}), 'EX', ARGV[2], 'NX')
-if not issued then return 'unavailable' end
-redis.call('DEL', KEYS[1])
-return 'ok'
-`;
-
 @Injectable()
-export class PasswordResetOtpService implements OnModuleDestroy {
+export class PasswordResetOtpService {
   private readonly cooldownSeconds = 60;
   private readonly resetTokenSeconds = 10 * 60;
   private readonly logger = new Logger(PasswordResetOtpService.name);
 
-  constructor(@Inject(AUTH_REDIS) private readonly redis: Redis, private readonly config: ConfigService) {}
+  constructor(private readonly db: Database, private readonly config: ConfigService) {}
 
   get expiresInSeconds() {
     const configured = Number(this.config.get('PASSWORD_RESET_OTP_TTL_MINUTES', 5));
     return Math.max(60, Math.round(configured * 60));
   }
 
-  private otpKey(email: string) { return `password-reset:otp:${email}`; }
-  private cooldownKey(email: string) { return `password-reset:cooldown:${email}`; }
-  private resetTokenKey(token: string) { return `password-reset:token:${hashValue(token)}`; }
-
-  private redisUnavailable(error: unknown): never {
-    this.logger.warn({event: 'auth.otp.redis_unavailable', errorType: error instanceof Error ? error.name : 'Unknown'});
+  private storageUnavailable(error: unknown, operation: StorageOperation): never {
+    const code = (error as {code?: unknown})?.code;
+    this.logger.warn({event: 'auth.otp.storage_unavailable', storage: 'mongodb', operation,
+      errorType: error instanceof Error ? error.name : 'Unknown',
+      ...(typeof code === 'number' && Number.isSafeInteger(code) ? {code} : {})});
     throw new ServiceUnavailableException('Layanan OTP sedang tidak tersedia. Coba lagi sebentar.');
   }
 
   async issue(email: string, userId?: string): Promise<IssuedPasswordResetOtp> {
     const normalizedEmail = email.trim().toLowerCase();
-    let cooldownReserved = false;
+    const now = new Date();
+    const expiresInSeconds = this.expiresInSeconds;
+    const cooldownUntil = new Date(now.getTime() + this.cooldownSeconds * 1000);
+    const otpExpiresAt = new Date(now.getTime() + expiresInSeconds * 1000);
+    const otp = userId ? String(randomInt(0, 1_000_000)).padStart(6, '0') : null;
     try {
-      const accepted = await this.redis.set(this.cooldownKey(normalizedEmail), '1', 'EX', this.cooldownSeconds, 'NX');
-      if (accepted !== 'OK') throw new HttpException('Tunggu sebentar sebelum meminta OTP baru.', HttpStatus.TOO_MANY_REQUESTS);
-      cooldownReserved = true;
-      if (!userId) return {otp: null, expiresInSeconds: this.expiresInSeconds};
-      const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
-      await this.redis.set(this.otpKey(normalizedEmail), JSON.stringify({userId, otpHash: hashValue(otp), attempts: 0} satisfies OtpRecord), 'EX', this.expiresInSeconds);
-      return {otp, expiresInSeconds: this.expiresInSeconds};
+      // The unique hashed-email _id makes parallel upserts contend on one row.
+      // An active cooldown does not match, so its duplicate insert becomes 429.
+      await this.db.collection('passwordResetChallenges').findOneAndUpdate({
+        _id: hashValue(normalizedEmail),
+        $or: [{cooldownUntil: {$lte: now}}, {cooldownUntil: {$exists: false}}],
+      }, {
+        $set: {attempts: 0, cooldownUntil,
+          expiresAt: new Date(Math.max(cooldownUntil.getTime(), otpExpiresAt.getTime())),
+          ...(otp ? {userId, otpHash: hashValue(otp), otpExpiresAt} : {})},
+        ...(!otp ? {$unset: {userId: 1, otpHash: 1, otpExpiresAt: 1}} : {}),
+      }, {upsert: true, returnDocument: 'after'}).lean();
+      return {otp, expiresInSeconds};
     } catch (error) {
-      if (cooldownReserved) await this.redis.del(this.cooldownKey(normalizedEmail)).catch(() => undefined);
+      if ((error as {code?: number})?.code === 11000) {
+        throw new HttpException('Tunggu sebentar sebelum meminta OTP baru.', HttpStatus.TOO_MANY_REQUESTS);
+      }
       if (error instanceof HttpException) throw error;
-      return this.redisUnavailable(error);
+      return this.storageUnavailable(error, 'issue');
     }
   }
 
+  private async clearChallenge(challenge: PasswordResetChallenge, session: ClientSession, now: Date, attempts = challenge.attempts) {
+    await this.db.collection('passwordResetChallenges').updateOne({_id: challenge._id}, {
+      $set: {attempts, expiresAt: new Date(Math.max(challenge.cooldownUntil.getTime(), now.getTime()))},
+      $unset: {otpHash: 1, otpExpiresAt: 1},
+    }, {session});
+  }
+
   async verify(email: string, otp: string): Promise<string> {
+    const challengeId = hashValue(email.trim().toLowerCase());
+    const resetToken = randomBytes(32).toString('base64url');
     try {
-      const key = this.otpKey(email.trim().toLowerCase());
-      const resetToken = randomBytes(32).toString('base64url');
-      const result = await this.redis.eval(PASSWORD_RESET_VERIFY_SCRIPT, 2, key, this.resetTokenKey(resetToken), hashValue(otp), this.resetTokenSeconds);
+      // Attempt accounting, consuming the OTP and issuing its reset credential
+      // commit together. Mongo retries write conflicts across API replicas.
+      const result = await this.db.connection.transaction(async (session): Promise<VerificationResult> => {
+        const now = new Date();
+        const challenge = await this.db.collection('passwordResetChallenges').findOne({_id: challengeId}).session(session).lean();
+        if (!challenge || !challenge.otpHash) return 'expired';
+        if (typeof challenge.userId !== 'string' || !challenge.userId ||
+            !/^[a-f0-9]{64}$/.test(challenge.otpHash) ||
+            !Number.isInteger(challenge.attempts) || challenge.attempts < 0 ||
+            !(challenge.otpExpiresAt instanceof Date) || !Number.isFinite(challenge.otpExpiresAt.getTime()) ||
+            !(challenge.cooldownUntil instanceof Date) || !Number.isFinite(challenge.cooldownUntil.getTime())) {
+          await this.db.collection('passwordResetChallenges').updateOne({_id: challengeId},
+            {$unset: {otpHash: 1, otpExpiresAt: 1}}, {session});
+          return 'invalid';
+        }
+        if (challenge.otpExpiresAt <= now) return 'expired';
+        if (challenge.attempts >= 5) {
+          await this.clearChallenge(challenge, session, now, 5);
+          return 'locked';
+        }
+        if (challenge.otpHash !== hashValue(otp)) {
+          const attempts = challenge.attempts + 1;
+          if (attempts >= 5) {
+            await this.clearChallenge(challenge, session, now, 5);
+            return 'locked';
+          }
+          await this.db.collection('passwordResetChallenges').updateOne({_id: challengeId}, {$inc: {attempts: 1}}, {session});
+          return 'mismatch';
+        }
+        await this.db.collection('passwordResetTokens').create([{
+          _id: hashValue(resetToken), userId: challenge.userId,
+          expiresAt: new Date(now.getTime() + this.resetTokenSeconds * 1000),
+        }], {session});
+        await this.clearChallenge(challenge, session, now);
+        return 'ok';
+      });
+      // Raise domain errors after commit so failed-attempt increments stay.
       if (result === 'expired') throw new UnauthorizedException('OTP kedaluwarsa atau belum diminta.');
       if (result === 'invalid') throw new UnauthorizedException('OTP tidak valid.');
       if (result === 'locked') throw new UnauthorizedException('Terlalu banyak percobaan OTP. Minta OTP baru.');
@@ -100,42 +116,52 @@ export class PasswordResetOtpService implements OnModuleDestroy {
       return resetToken;
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      return this.redisUnavailable(error);
+      return this.storageUnavailable(error, 'verify');
     }
   }
 
   async peek(resetToken: string): Promise<string> {
     try {
-      const stored = await this.redis.get(this.resetTokenKey(resetToken));
-      if (!stored) throw new UnauthorizedException('Token reset kedaluwarsa atau sudah dipakai.');
-      try {
-        const record = JSON.parse(stored) as ResetTokenRecord;
-        if (!record.userId) throw new Error('Missing reset token user ID');
-        return record.userId;
-      } catch (error) {
-        if (error instanceof HttpException) throw error;
-        throw new UnauthorizedException('Token reset tidak valid.');
-      }
+      // TTL is cleanup only: expired rows are rejected before physical deletion.
+      const record = await this.db.collection('passwordResetTokens').findOne({
+        _id: hashValue(resetToken), expiresAt: {$gt: new Date()},
+      }).lean();
+      if (!record) throw new UnauthorizedException('Token reset kedaluwarsa atau sudah dipakai.');
+      if (typeof record.userId !== 'string' || !record.userId) throw new UnauthorizedException('Token reset tidak valid.');
+      return record.userId;
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      return this.redisUnavailable(error);
+      return this.storageUnavailable(error, 'peek');
     }
   }
 
-  async consume(resetToken: string): Promise<string> {
+  async consume(resetToken: string, session?: ClientSession): Promise<string> {
     try {
-      const stored = await this.redis.getdel(this.resetTokenKey(resetToken));
-      if (!stored) throw new UnauthorizedException('Token reset kedaluwarsa atau sudah dipakai.');
-      try {
-        return (JSON.parse(stored) as ResetTokenRecord).userId;
-      } catch {
-        throw new UnauthorizedException('Token reset tidak valid.');
-      }
+      const query = this.db.collection('passwordResetTokens').findOneAndDelete({
+        _id: hashValue(resetToken), expiresAt: {$gt: new Date()},
+      });
+      if (session) query.session(session);
+      const record = await query.lean();
+      if (!record) throw new UnauthorizedException('Token reset kedaluwarsa atau sudah dipakai.');
+      if (typeof record.userId !== 'string' || !record.userId) throw new UnauthorizedException('Token reset tidak valid.');
+      return record.userId;
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      return this.redisUnavailable(error);
+      // Preserve Mongo error labels until the enclosing transaction can retry.
+      if (session) throw error;
+      return this.storageUnavailable(error, 'consume');
     }
   }
 
-  onModuleDestroy() { this.redis.disconnect(); }
+  async completeReset<T>(resetToken: string, savePassword: (userId: string, session: ClientSession) => Promise<T>): Promise<T> {
+    try {
+      return await this.db.connection.transaction(async session => {
+        const userId = await this.consume(resetToken, session);
+        return savePassword(userId, session);
+      });
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      return this.storageUnavailable(error, 'consume');
+    }
+  }
 }

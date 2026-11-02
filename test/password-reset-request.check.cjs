@@ -69,7 +69,7 @@ test('registered email is normalized and accepted only after its own OTP mail co
   }
 });
 
-test('OTP cooldown and Redis failure keep their authoritative errors without sending mail', async () => {
+test('OTP cooldown and storage failure keep their authoritative errors without sending mail', async () => {
   for (const failure of [new HttpException('Tunggu sebentar sebelum meminta OTP baru.', 429), new ServiceUnavailableException('Layanan OTP sedang tidak tersedia. Coba lagi sebentar.')]) {
     const ctx = setup();
     ctx.otp.issue = async () => {throw failure;};

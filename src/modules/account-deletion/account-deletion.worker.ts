@@ -18,6 +18,7 @@ type ErasedCollection = typeof erasedWorkspaceCollections[number];
 // Adding a collection must explicitly choose how account erasure handles it.
 export const collectionErasurePolicy: Record<keyof Collections, 'workspace-batch'|'special'|'tombstone'> = {
   users: 'special', workspaces: 'special', authSessions: 'special', portalSessions: 'special',
+  passwordResetChallenges: 'special', passwordResetTokens: 'special',
   portalAccounts: 'special', subscriptions: 'special', subscriptionOrders: 'special', billingEvents: 'special',
   accountDeletions: 'tombstone',
   families: 'workspace-batch', studentGroups: 'workspace-batch', tuitionFees: 'workspace-batch', students: 'workspace-batch', subjects: 'workspace-batch',
@@ -84,6 +85,8 @@ export class AccountDeletionWorker implements OnModuleInit, OnModuleDestroy {
       }
       const filter = {workspaceId: job.workspaceId};
       await this.db.collection('authSessions').deleteMany({userId: job.userId});
+      await this.db.collection('passwordResetChallenges').deleteMany({userId: job.userId});
+      await this.db.collection('passwordResetTokens').deleteMany({userId: job.userId});
       const accounts = await this.db.collection('portalAccounts').find(filter).select('_id').limit(pageSize).lean();
       await this.db.collection('portalSessions').deleteMany({accountId: {$in: accounts.map(account => account._id)}});
       await this.db.collection('portalAccounts').deleteMany({...filter, _id: {$in: accounts.map(account => account._id)}});
@@ -122,6 +125,8 @@ export class AccountDeletionWorker implements OnModuleInit, OnModuleDestroy {
         ...erasedWorkspaceCollections.map(name => this.db.collection(name).exists(filter)),
         this.db.collection('portalAccounts').exists(filter),
         this.db.collection('subscriptionOrders').exists(filter),
+        this.db.collection('passwordResetChallenges').exists({userId: job.userId}),
+        this.db.collection('passwordResetTokens').exists({userId: job.userId}),
       ]);
       complete = !externalPending && !remaining.some(Boolean);
       if (complete) {

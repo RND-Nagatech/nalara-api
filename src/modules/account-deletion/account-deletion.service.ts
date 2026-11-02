@@ -69,6 +69,8 @@ export class AccountDeletionService {
       const accounts = await this.db.collection('portalAccounts').find({workspaceId: actor.workspaceId}).select('_id').session(session).lean();
       await this.db.collection('portalAccounts').updateMany({workspaceId: actor.workspaceId}, {$set: {status: 'revoked'}}, {session});
       await this.db.collection('authSessions').deleteMany({userId: actor._id}, {session});
+      await this.db.collection('passwordResetChallenges').deleteMany({userId: actor._id}, {session});
+      await this.db.collection('passwordResetTokens').deleteMany({userId: actor._id}, {session});
       await this.db.collection('portalSessions').deleteMany({accountId: {$in: accounts.map(account => account._id)}}, {session});
       await this.db.collection('notificationDevices').deleteMany({workspaceId: actor.workspaceId}, {session});
       await this.db.collection('notifications').updateMany({workspaceId: actor.workspaceId, deliveryStatus: {$in: ['pending', 'delivering']}},

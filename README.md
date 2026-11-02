@@ -138,7 +138,11 @@ Default `ACCOUNT_DELETION_INTERVAL_SECONDS=60`, `ACCOUNT_DELETION_BATCH_SIZE=5` 
 
 `npm run verify:source` menjalankan typecheck tanpa emit, lint, tes hardening terisolasi dan tes kebijakan langganan. Tidak memulai Nest, listener, koneksi database/Redis/Firebase/SingaPay, atau menghasilkan dist. Jangan gunakan `npm test` sebagai pengganti ketika build/runtime tidak diizinkan: script tersebut membuild aplikasi dan menjalankan E2E.
 
-OTP kini diverifikasi melalui satu script Lua Redis (termasuk counter, TTL, konsumsi dan reset token). Tes Redis nyata tersedia opt-in melalui `RUN_REDIS_INTEGRATION=true npm run test:otp:redis`, hanya terhadap Redis development/disposable yang sudah berjalan; default host lokal, DB 15, prefix email UUID. Tidak memakai FLUSHDB/FLUSHALL dan belum dijalankan dalam batch ini. Set `REDIS_TEST_HOST`, `REDIS_TEST_PORT`, `REDIS_TEST_DB`, `REDIS_TEST_PASSWORD` bila diperlukan. Redis standalone 7.4 existing didukung; script dua key belum ditujukan untuk Redis Cluster.
+OTP/reset password kini menggunakan koneksi MongoDB yang sama, tanpa Redis. Challenge memakai ID hash email, hash OTP, counter, cooldown 60 detik dan tanggal kedaluwarsa; token reset disimpan sebagai hash selama 10 menit. Verifikasi/counter/konsumsi OTP/penerbitan token memakai transaksi. Simpan password, konsumsi token reset dan pencabutan sesi juga satu transaksi. TTL index hanya membersihkan data; query tetap menolak data kedaluwarsa sebelum dihapus. MongoDB harus berupa replica set/Atlas seperti kebutuhan transaksi aplikasi lainnya.
+
+Tes Mongo nyata disiapkan opt-in: `RUN_MONGO_INTEGRATION=true npm run test:otp:mongo`, dengan `MONGODB_TEST_URI` untuk replica set development/disposable yang sudah berjalan. Tes hanya membuat/menghapus database `nalara_test_<UUID>`, tidak menggunakan `MONGODB_URI` aplikasi atau memulai server; belum dijalankan dalam perubahan ini. Pemeriksaan source menggunakan fake dan tidak membuktikan konkurensi Mongo nyata.
+
+Deploy backend terbaru ke semua instance dan restart setelah build. OTP/token Redis yang sudah terbit tidak dimigrasikan: pengguna yang sedang reset perlu meminta OTP baru setelah perpindahan. Index koleksi baru dibuat saat startup oleh mekanisme registry existing. `REDIS_*` lama tidak lagi dipakai; Compose tidak lagi memerlukan Redis. Tidak ada penghapusan container/volume atau perubahan `.env` pengguna yang dijalankan otomatis. Resend dan pengalihan `RESEND_TEST_RECIPIENT` pada development tetap seperti sebelumnya.
 
 Target distribusi adalah Google Play dan App Store. Integrasi pembelian store, opsi login iOS, signing produksi, penghapusan akun, backup/monitoring dan validasi runtime masih menjadi gerbang rilis terpisah. [Roadmap dan status aktual](../docs/SAAS_ROADMAP.md).
 
@@ -148,9 +152,9 @@ Target distribusi adalah Google Play dan App Store. Integrasi pembelian store, o
 
 - Node.js `24.13.x` (sesuai `engines` pada `package.json`).
 - npm dan Docker Desktop/Engine yang sedang berjalan.
-- Port lokal yang tersedia: `3100` (API), `27018` (MongoDB), dan `6379` (Redis).
+- Port lokal yang tersedia: `3100` (API) dan `27018` (MongoDB).
 
-### Pilihan A — API di host, MongoDB dan Redis di Docker (disarankan untuk development)
+### Pilihan A — API di host, MongoDB di Docker (disarankan untuk development)
 
 > Jalankan perintah dari root repository Nalara, bukan dari dalam `backend_bimbel`.
 
@@ -167,24 +171,18 @@ Target distribusi adalah Google Play dan App Store. Integrasi pembelian store, o
    PORT=3100
    MONGODB_URI=mongodb://127.0.0.1:27018/nalara?replicaSet=rs0&directConnection=true
    CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
-   REDIS_URL=
-   REDIS_HOST=127.0.0.1
-   REDIS_PORT=6379
-   REDIS_USERNAME=
-   REDIS_PASSWORD=
    ```
 
    Isi `RESEND_API_KEY` dan `RESEND_FROM_EMAIL` jika ingin menguji pengiriman OTP sungguhan. Untuk development, `RESEND_TEST_RECIPIENT` dapat diarahkan ke email pengujian.
 
-2. Nyalakan MongoDB **dan Redis** melalui Docker Compose. Redis diperlukan untuk OTP lupa password, cooldown, percobaan OTP, dan reset token.
+2. Nyalakan MongoDB melalui Docker Compose. Database yang sama menyimpan OTP, cooldown, batas percobaan dan token reset; Redis tidak diperlukan.
 
    ```sh
-   docker compose up -d mongo redis
+   docker compose up -d mongo
    docker compose ps
-   docker compose exec redis redis-cli ping
    ```
 
-   Output Redis yang benar adalah `PONG`. Tunggu sampai service `mongo` dan `redis` berstatus `healthy`. Compose menginisialisasi replica set MongoDB `rs0` melalui healthcheck; tidak perlu menjalankan `rs.initiate` manual.
+   Tunggu sampai service `mongo` berstatus `healthy`. Compose menginisialisasi replica set MongoDB `rs0` melalui healthcheck; tidak perlu menjalankan `rs.initiate` manual.
 
 3. Install dependency dan jalankan API.
 
@@ -201,14 +199,14 @@ Target distribusi adalah Google Play dan App Store. Integrasi pembelian store, o
    npm run start:dev
    ```
 
-4. Verifikasi API, database, dan Redis.
+4. Verifikasi API dan database.
 
    ```sh
    curl http://localhost:3100/api/v1/health/live
    curl http://localhost:3100/api/v1/health/ready
    ```
 
-   Buka Swagger di [http://localhost:3100/api/docs](http://localhost:3100/api/docs). Readiness harus menunjukkan database dan Redis `up`.
+   Buka Swagger di [http://localhost:3100/api/docs](http://localhost:3100/api/docs). Readiness harus menunjukkan `status: up` dan `database: up`.
 
 5. Seed data demo (opsional, hanya development). Set credential sendiri melalui `.env` atau environment shell, lalu jalankan dari `backend_bimbel`:
 
@@ -231,7 +229,7 @@ docker compose ps
 docker compose logs -f api
 ```
 
-Pada mode ini API memakai hostname internal Compose: MongoDB `mongo:27017` dan Redis `redis:6379`. Jangan menjalankan `npm start` di host bersamaan dengan mode ini karena keduanya memakai port API `3100`. Healthcheck API dapat dicek dengan:
+Pada mode ini API memakai hostname internal Compose MongoDB `mongo:27017`. Jangan menjalankan `npm start` di host bersamaan dengan mode ini karena keduanya memakai port API `3100`. Healthcheck API dapat dicek dengan:
 
 ```sh
 curl http://localhost:3100/api/v1/health/ready
@@ -243,7 +241,7 @@ curl http://localhost:3100/api/v1/health/ready
 docker compose stop
 ```
 
-`docker compose down` menghentikan dan menghapus container, tetapi volume data tetap ada. Jangan gunakan `docker compose down -v` kecuali memang ingin menghapus data MongoDB, Redis dan logo uploads development.
+`docker compose down` menghentikan dan menghapus container, tetapi volume data tetap ada. Jangan gunakan `docker compose down -v` kecuali memang ingin menghapus data MongoDB dan logo uploads development. Volume Redis lama tidak disentuh oleh migrasi source ini.
 
 ## Portal Siswa
 
@@ -264,16 +262,15 @@ npm run build
 npm start
 ```
 
-Perintah di atas adalah versi singkat jika MongoDB dan Redis sudah berjalan. `npm run start:dev` memakai Nest CLI watch untuk mengompilasi dan memuat ulang perubahan TypeScript otomatis; tidak perlu menjalankan build di terminal kedua. Tidak ada upgrade major otomatis.
+Perintah di atas adalah versi singkat jika MongoDB sudah berjalan. `npm run start:dev` memakai Nest CLI watch untuk mengompilasi dan memuat ulang perubahan TypeScript otomatis; tidak perlu menjalankan build di terminal kedua. Tidak ada upgrade major otomatis.
 
-Environment wajib: `MONGODB_URI`, `CORS_ORIGINS` eksplisit, dan `PORT` valid. `.env` diabaikan Git. Default lokal adalah API `3100`, MongoDB replica set `rs0` pada port `27018`, dan Redis pada port `6379`. URI host memakai `directConnection=true`; API container memakai URI internal `mongo:27017` dan `redis:6379` yang dioverride oleh Compose. Redis harus hidup sebelum request OTP dikirim. Jika Redis unavailable, endpoint reset password mengembalikan `503 UNAVAILABLE`, bukan `500`.
+Environment wajib: `MONGODB_URI`, `CORS_ORIGINS` eksplisit, dan `PORT` valid. `.env` diabaikan Git. Default lokal adalah API `3100` dan MongoDB replica set `rs0` pada port `27018`. URI host memakai `directConnection=true`; API container memakai URI internal `mongo:27017` yang dioverride oleh Compose. Penyimpanan OTP menggunakan koneksi MongoDB yang sama; kegagalan storage menghasilkan `503 UNAVAILABLE`, bukan respons sukses. `REDIS_*` legacy tidak dipakai lagi.
 
 | Kelompok | Environment | Keterangan |
 | --- | --- | --- |
 | Runtime | `NODE_ENV`, `PORT`, `LOG_LEVEL` | `development`, `test`, atau `production`; port default `3100` |
 | Database | `MONGODB_URI` | Wajib MongoDB URI; development memakai replica set `rs0` |
 | CORS | `CORS_ORIGINS` | Daftar origin HTTPS/HTTP lokal dipisahkan koma; wildcard tidak boleh |
-| Redis | `REDIS_URL` atau `REDIS_HOST`, `REDIS_PORT`, `REDIS_USERNAME`, `REDIS_PASSWORD` | Jika `REDIS_URL` diisi, URL dipakai sebagai prioritas. Jika kosong, backend memakai host/port/username/password. Default lokal `127.0.0.1:6379`; wajib untuk reset password |
 | OTP | `PASSWORD_RESET_OTP_TTL_MINUTES` | TTL OTP 1–60 menit, default 5 |
 | Email | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_TEST_RECIPIENT` | API key/from wajib production; recipient test hanya non-production |
 | Firebase | `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` atau `GOOGLE_APPLICATION_CREDENTIALS` | Verifikasi Google dan FCM; credential hanya di environment backend |
@@ -394,7 +391,7 @@ Field `workspaceId` berarti data hanya boleh dibaca oleh Guru/portal yang mempun
 | `reportTemplates` | `workspaceId`, `name`, `topic`, `summary`, `observations`, `difficulties`, `homework`, `recommendation` |
 | `tutorPreferences` | `workspaceId` unik, `displayName`, `tagline`, `footer`, `accentColor`, flag `reminders/progress/reports/assignments` |
 
-Redis bukan sumber data utama MongoDB. Redis menyimpan sementara hash OTP reset password, cooldown request, dan reset token sekali pakai dengan TTL. Redis juga harus tersedia saat API memproses flow lupa password.
+Koleksi `passwordResetChallenges` menyimpan ID hash email, userId, hash OTP, attempts, otpExpiresAt, cooldownUntil dan expiresAt. Koleksi `passwordResetTokens` menyimpan ID hash token, userId dan expiresAt. Keduanya memakai TTL index dan index userId untuk penghapusan akun. Tidak ada OTP/token/email mentah yang disimpan pada kedua koleksi tersebut.
 
 ## API & data
 
@@ -412,7 +409,7 @@ Prefix `/api/v1`, Swagger `/api/docs`, JSON spec `/api/docs-json`, liveness `/ap
 
 Response sukses `{data: ...}`; list `{data:{items,total,page,limit}}`; error `{error:{code,message,requestId}}`. Kontrak route terdapat di [../docs/API.md](../docs/API.md).
 
-Password Argon2id; access token acak 15 menit dan refresh token acak 30 hari. Server menyimpan SHA-256 token, refresh dirotasi secara atomik, access lama dicabut saat refresh, logout langsung mencabut sesi, reset mencabut seluruh sesi user. Reset password memakai OTP Redis dengan TTL/cooldown/attempt limit dan email Resend (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`); `RESEND_TEST_RECIPIENT` opsional untuk development. Jika Redis belum tersedia, endpoint reset mengembalikan `503 UNAVAILABLE` dengan request ID dan tidak meninggalkan cooldown parsial. Role client dan workspace payload tidak dipercaya. Hanya role teacher yang diizinkan mengakses API Guru.
+Password Argon2id; access token acak 15 menit dan refresh token acak 30 hari. Server menyimpan SHA-256 token, refresh dirotasi secara atomik, access lama dicabut saat refresh, logout langsung mencabut sesi, reset mencabut seluruh sesi user. Reset password memakai OTP MongoDB dengan TTL/cooldown/attempt limit dan email Resend (`RESEND_API_KEY`, `RESEND_FROM_EMAIL`); `RESEND_TEST_RECIPIENT` opsional untuk development. Jika MongoDB belum tersedia, endpoint reset mengembalikan `503 UNAVAILABLE` dengan request ID. Role client dan workspace payload tidak dipercaya. Hanya role teacher yang diizinkan mengakses API Guru.
 
 Forgot-password memeriksa email terdaftar terlebih dahulu. Email yang tidak ditemukan atau akun dalam penghapusan mendapat `404 EMAIL_NOT_REGISTERED` dengan pesan `Maaf, email belum terdaftar.`, tanpa membuat OTP/cooldown atau mengirim email. Respons `accepted: true` hanya diberikan setelah pengiriman OTP untuk akun terdaftar berhasil; kegagalan Redis/pengiriman tidak menjadi sukses palsu. Rate limit 3 permintaan per menit, cooldown dan batas percobaan OTP tetap aktif. Pemeriksaan terisolasi tersedia melalui `npm run test:password-reset` tanpa menjalankan API, database atau provider email. Server yang sudah berjalan/produksi perlu memakai deployment terbaru agar kontrak ini berlaku.
 
@@ -495,7 +492,7 @@ Seed tidak dijalankan di production dan tidak menimpa workspace yang berisi sisw
 - Error ESM pada tes: gunakan Node 24.9+ dan script `npm test`, bukan Jest tanpa flag VM modules.
 - CORS: samakan origin Flutter dengan `CORS_ORIGINS`; contoh browser memakai port 8080.
 - 409 update progress: GET target kembali untuk versi terbaru; jangan menyimpan ulang memakai versi lama.
-- 503 reset: periksa readiness database dan Redis pada `/api/v1/health/ready`, lalu konfigurasi Redis serta `RESEND_API_KEY` dan `RESEND_FROM_EMAIL`; untuk development, `RESEND_TEST_RECIPIENT` dapat diarahkan ke email pengujian.
+- 503 reset: periksa database replica set/index/izin read-write melalui `/api/v1/health/ready` dan log `auth.otp.storage_unavailable` (operation/type/code tanpa rahasia), lalu konfigurasi `RESEND_API_KEY` dan `RESEND_FROM_EMAIL`; untuk development, `RESEND_TEST_RECIPIENT` dapat diarahkan ke email pengujian. Redis tidak diperlukan.
 - Jika OTP pertama setelah restart API gagal, pastikan Redis hidup. Kode sekarang menunggu koneksi Redis singkat saat startup/request; kegagalan dependency dikembalikan sebagai `503`, bukan `500`.
 
 Compose adalah konfigurasi development. Production membutuhkan MongoDB yang diautentikasi, TLS, backup, monitoring, provider delivery, dan konfigurasi secret yang sesuai lingkungan.

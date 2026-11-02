@@ -174,6 +174,23 @@ test('all workspace batch policies are included in the erasure list', () => {
   assert.equal(collectionErasurePolicy.accountDeletions, 'tombstone');
 });
 
+test('account closure and durable erasure remove only that user\'s OTPs and reset credentials', async () => {
+  const extra = {
+    passwordResetChallenges: [{_id: 'own-challenge', userId: actor._id}, {_id: 'other-challenge', userId: other._id}],
+    passwordResetTokens: [{_id: 'own-token', userId: actor._id}, {_id: 'other-token', userId: other._id}],
+  };
+  const ctx = setup(extra);
+  await ctx.service.request(actor, proof);
+  assert.deepEqual(ctx.data.passwordResetChallenges, [{_id: 'other-challenge', userId: other._id}]);
+  assert.deepEqual(ctx.data.passwordResetTokens, [{_id: 'other-token', userId: other._id}]);
+  // Late in-flight writes remain covered by the durable worker's next pass.
+  ctx.data.passwordResetChallenges.push({_id: 'late-challenge', userId: actor._id});
+  ctx.data.passwordResetTokens.push({_id: 'late-token', userId: actor._id});
+  await ctx.worker.run();
+  assert.ok(ctx.data.passwordResetChallenges.every(row => row.userId === other._id));
+  assert.ok(ctx.data.passwordResetTokens.every(row => row.userId === other._id));
+});
+
 test('worker erases only the confirmed workspace and Firebase app identity, retaining a minimal tombstone', async () => {
   const ctx = setup();
   for (const name of erasedWorkspaceCollections) ctx.data[name] = [{_id: `${name}-a`, workspaceId: actor.workspaceId}, {_id: `${name}-b`, workspaceId: other.workspaceId}];

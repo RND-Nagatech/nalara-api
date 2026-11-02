@@ -4,8 +4,6 @@ process.env.MONGODB_URI = `mongodb://127.0.0.1:27018/${databaseName}?replicaSet=
 process.env.CORS_ORIGINS = 'http://localhost:8080';
 process.env.NODE_ENV = 'test';
 process.env.LOG_LEVEL = 'silent';
-process.env.REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
-process.env.REDIS_PORT = process.env.REDIS_PORT || '6379';
 const {createApplication} = require('../dist/main');
 const {Database} = require('../dist/database/database.module');
 const {LearningService} = require('../dist/modules/learning-plans/learning.service');

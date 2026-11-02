@@ -1,13 +1,11 @@
-import { Body, Controller, Get, HttpCode, Logger, Module, Post, Req } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import { Body, Controller, Get, HttpCode, Module, Post, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Actor, AuthRequest, Principal, Public } from '../../common/api';
 import { AuthService } from './auth.service';
 import { ForgotDto, GoogleLoginDto, LoginDto, RefreshDto, RegisterDto, ResetDto, VerifyResetOtpDto } from './auth.dto';
 import { FirebaseAuthService } from './firebase-auth.service';
-import { AUTH_REDIS, PasswordResetOtpService } from './password-reset-otp.service';
+import { PasswordResetOtpService } from './password-reset-otp.service';
 import { ResendMailService } from './resend-mail.service';
 @ApiTags('Authentication')
 @Controller('auth')
@@ -31,35 +29,7 @@ export class MeController { @Get() me(@Actor() actor: Principal) { return actor;
     FirebaseAuthService,
     PasswordResetOtpService,
     ResendMailService,
-    {
-      provide: AUTH_REDIS,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const logger = new Logger('AuthRedis');
-        const connectionOptions = {
-          connectTimeout: 5_000,
-          commandTimeout: 5_000,
-          lazyConnect: false,
-          enableOfflineQueue: true,
-          maxRetriesPerRequest: 1,
-          retryStrategy: (attempt: number) => Math.min(250 * 2 ** Math.min(attempt - 1, 4), 5_000),
-        };
-        const redisUrl = String(config.get('REDIS_URL', '') || '').trim();
-        const redis = redisUrl
-          ? new Redis(redisUrl, connectionOptions)
-          : new Redis({
-          host: config.get('REDIS_HOST', '127.0.0.1'),
-          port: Number(config.get('REDIS_PORT', 6379)),
-          username: String(config.get('REDIS_USERNAME', '') || '') || undefined,
-          password: String(config.get('REDIS_PASSWORD', '') || '') || undefined,
-          ...connectionOptions,
-        });
-        redis.on('ready', () => logger.log('Redis ready'));
-        redis.on('error', error => logger.warn(`Redis unavailable: ${error.message}`));
-        return redis;
-      },
-    },
   ],
-  exports: [AuthService, FirebaseAuthService, AUTH_REDIS],
+  exports: [AuthService, FirebaseAuthService],
 })
 export class AuthModule {}

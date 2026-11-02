@@ -146,12 +146,13 @@ export class AuthService {
     if (await verify(user.passwordHash, dto.newPassword)) {
       throw new ConflictException('Password baru tidak boleh sama dengan password sebelumnya.');
     }
-    const consumedUserId = await this.passwordResetOtp.consume(dto.resetToken);
-    if (consumedUserId !== userId) throw new UnauthorizedException('Token reset tidak valid.');
     const passwordHash = await hash(dto.newPassword, {type: argon2id});
-    const updated = await this.db.collection('users').updateOne({_id: userId, deletionRequestedAt: {$exists: false}}, {$set:{passwordHash}});
-    if (updated.matchedCount !== 1) throw new UnauthorizedException('Token reset tidak valid.');
-    await this.db.collection('authSessions').deleteMany({userId});
+    await this.passwordResetOtp.completeReset(dto.resetToken, async (consumedUserId, session) => {
+      if (consumedUserId !== userId) throw new UnauthorizedException('Token reset tidak valid.');
+      const updated = await this.db.collection('users').updateOne({_id: userId, deletionRequestedAt: {$exists: false}}, {$set:{passwordHash}}, {session});
+      if (updated.matchedCount !== 1) throw new UnauthorizedException('Token reset tidak valid.');
+      await this.db.collection('authSessions').deleteMany({userId}, {session});
+    });
     return {message: 'Kata sandi diperbarui. Silakan masuk kembali.'};
   }
 }

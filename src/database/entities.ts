@@ -7,6 +7,9 @@ export interface Collections { tuitionFees: TuitionFee; }
 export interface User extends Base { name: string; email: string; phone?: string; avatarId?: string | null; passwordHash: string; firebaseUid?: string; role: 'teacher'; workspaceId: string; timezone: string; teachingTutorialSeen?: boolean; deletionRequestedAt?: Date; authVersion?: number; }
 export interface Workspace extends Base { name: string; ownerId: string; scheduleVersion?: number; deletionRequestedAt?: Date; }
 export interface AuthSession extends Base { userId: string; accessHash: string; refreshHash: string; accessExpiresAt: Date; expiresAt: Date; }
+export interface PasswordResetChallenge extends Base { userId?: string; otpHash?: string; attempts: number; otpExpiresAt?: Date; cooldownUntil: Date; expiresAt: Date; }
+export interface PasswordResetToken extends Base { userId: string; expiresAt: Date; }
+export interface Collections { passwordResetChallenges: PasswordResetChallenge; passwordResetTokens: PasswordResetToken; }
 export interface Student extends Scoped { name: string; grade: string; notes: string; avatarId?: string | null; status: 'active' | 'archived'; familyId?:string; invitationVersion:number; currentInvitationId?:string; }
 export interface Family extends Scoped { name:string; parentName:string; parentPhone:string; version:number; invitationVersion:number; currentInvitationId?:string; }
 export interface PortalAccount extends Scoped { role:'student'|'parent'; familyId?:string; studentId?:string; status:'active'|'revoked'; notificationVersion?:number; }

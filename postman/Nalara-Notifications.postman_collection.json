@@ -53,7 +53,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/health/live",
-            "description": "Memastikan proses API hidup sebelum menjalankan skenario. Gunakan /health/ready untuk memeriksa MongoDB dan Redis juga."
+            "description": "Memastikan proses API hidup sebelum menjalankan skenario. Gunakan /health/ready untuk memeriksa MongoDB. OTP/reset password memakai MongoDB; Redis tidak diperlukan."
           },
           "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": ["pm.test('API merespons sukses', function () { pm.expect(pm.response.code).to.be.within(200, 299); });"]}}]
         }
